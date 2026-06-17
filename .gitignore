@@ -1,0 +1,7 @@
+# Segredos gerados pelo install.sh. Nunca versione.
+.env
+.env.*
+
+# Artefatos locais
+*.log
+.DS_Store

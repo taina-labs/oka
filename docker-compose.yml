@@ -1,0 +1,90 @@
+# Taina single-box deployment. install.sh writes the .env this file reads.
+# Caddy is the only public ingress; the app speaks plain HTTP on 4000 on the
+# internal network and is never published to the host directly.
+services:
+  db:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-taina}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-taina}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-taina}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    image: ${TAINA_IMAGE:-ghcr.io/taina-labs/taina:latest}
+    pull_policy: always
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ecto://${POSTGRES_USER:-taina}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db/${POSTGRES_DB:-taina}
+      PHX_HOST: ${PHX_HOST:-localhost}
+      PHX_SERVER: "true"
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE:?set SECRET_KEY_BASE in .env}
+      PORT: "4000"
+      # Storage (Ybira uploads) - must match STORAGE_ROOT read in
+      # config/runtime.exs, or uploads fall back to the default path.
+      STORAGE_ROOT: /app/storage
+      # Backup (Nhaman) - off by default; "true" enables the scheduled
+      # pg_dump + storage archive written under BACKUP_DIR.
+      BACKUP_ENABLED: ${BACKUP_ENABLED:-false}
+      BACKUP_DIR: /app/backups
+    # Internal only: exposed to the compose network so Caddy can reach it.
+    # Not published to the host (no `ports:`); Caddy fronts all traffic.
+    expose:
+      - "4000"
+    volumes:
+      - storage_data:/app/storage
+      # Backups land here; mount a host disk/USB in production instead.
+      - backups_data:/app/backups
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - app
+    # When TAINA_DOMAIN is set and ports 80/443 are reachable, Caddy gets a real
+    # Let's Encrypt cert (HTTP-01). When unset, the Caddyfile falls back to a
+    # local CA (tls internal) for LAN/overlay use. See deploy/Caddyfile and the
+    # acesso-remoto guide for the topology matrix (Tailscale/Headscale certs).
+    environment:
+      TAINA_DOMAIN: ${TAINA_DOMAIN:-}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  postgres_data:
+    driver: local
+  storage_data:
+    driver: local
+  backups_data:
+    driver: local
+  caddy_data:
+    driver: local
+  caddy_config:
+    driver: local
+
+networks:
+  default:
+    name: taina_network
