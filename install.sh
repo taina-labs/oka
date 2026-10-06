@@ -26,7 +26,16 @@ step "Conferindo requisitos"
 command -v docker >/dev/null 2>&1 || die "docker não está instalado. Veja https://docs.docker.com/get-docker/"
 docker compose version >/dev/null 2>&1 || die "o plugin docker compose está faltando. Instale o Docker Compose v2."
 command -v openssl >/dev/null 2>&1 || die "openssl não está instalado."
-say "Tudo certo: docker, docker compose e openssl estão presentes."
+if command -v curl >/dev/null 2>&1; then
+  say "Tudo certo: docker, docker compose, openssl e curl estão presentes."
+else
+  # curl é opcional: a checagem de saúde roda de dentro do container do app, e
+  # a imagem já traz o curl. Sem curl no host, o aviso sobre o certificado local
+  # do navegador fica de fora, mas a instalação segue normal.
+  say "Tudo certo: docker, docker compose e openssl estão presentes."
+  say "curl não está instalado. Não é problema: a checagem de saúde roda de"
+  say "dentro do container. Só o aviso do certificado local fica de fora no fim."
+fi
 
 # ---------------------------------------------------------------------------
 # 2. Escrever o .env uma única vez. Rodar de novo nunca apaga os segredos.
@@ -79,19 +88,54 @@ fi
 # ---------------------------------------------------------------------------
 # 3. Baixar e subir os serviços.
 # ---------------------------------------------------------------------------
+step "Baixando a imagem do Tainá"
+IMAGE="$(grep '^TAINA_IMAGE=' "$ENV_FILE" 2>/dev/null | cut -d= -f2-)"
+IMAGE="${IMAGE:-ghcr.io/taina-labs/taina:latest}"
+
+if ! $COMPOSE pull; then
+  # Uma falha no download não é sempre um problema: se a imagem já estiver
+  # local (instalação repetida, ou imagem montada com ./build-image.sh), seguimos
+  # com ela. Se não estiver, o pull_policy `missing` tentaria construir e a
+  # mensagem seria confusa, então falamos aqui com a instrução certa.
+  if docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    say "Não consegui baixar $IMAGE do registro, mas ela já está nesta máquina."
+    say "Seguindo com a imagem local."
+  else
+    say ""
+    say "Não consegui baixar a imagem do Tainá ($IMAGE)."
+    say ""
+    say "Se você está antes do primeiro lançamento, a imagem ainda pode não"
+    say "existir no registro. Você pode montar a imagem na sua própria caixa:"
+    say ""
+    say "    ./build-image.sh"
+    say ""
+    say "Depois rode o ./install.sh de novo."
+    die "imagem do Tainá indisponível"
+  fi
+fi
+
 step "Subindo o Tainá (banco, app e proxy reverso)"
-$COMPOSE pull
 $COMPOSE up -d
 
 # ---------------------------------------------------------------------------
 # 4. Esperar o app responder que está saudável.
+#
+# A sondagem roda de dentro do container do app, em http://localhost:4000/health.
+# Ela é a fonte da verdade: o endpoint só responde 200 quando o app subiu E o
+# PostgreSQL respondeu, que é a condição que install.sh precisa confirmar. Não
+# depende de curl no host, nem de certificado, nem de o Caddy já ter emitido o
+# certificado dele (com TAINA_DOMAIN, o Caddy serve só aquele domínio, então
+# sondar https://localhost nunca bateria, e a porta 4000 não é publicada).
+#
+# O Caddy é conferido depois, em separado e sem matar a instalação: emitir um
+# certificado Let's Encrypt leva dezenas de segundos e não é motivo para
+# declarar falha com o app já no ar.
 # ---------------------------------------------------------------------------
 step "Esperando o Tainá subir (no primeiro boot pode levar um minuto)"
 HEALTHY=0
 i=1
 while [ "$i" -le 60 ]; do
-  if curl -fsk "https://localhost/health" >/dev/null 2>&1 ||
-     curl -fs "http://localhost:4000/health" >/dev/null 2>&1; then
+  if $COMPOSE exec -T app curl -fsS http://localhost:4000/health >/dev/null 2>&1; then
     HEALTHY=1
     break
   fi
@@ -124,12 +168,41 @@ say "administrador:"
 say ""
 say "    $URL"
 say ""
+
+# Aviso honesto, nunca fatal: o app está no ar; o Caddy é que pode ainda estar
+# emitindo o certificado.
+if command -v curl >/dev/null 2>&1; then
+  say "Conferindo o proxy reverso (na primeira vez leva alguns segundos)..."
+  PROXY_OK=0
+  i=1
+  while [ "$i" -le 24 ]; do
+    if curl -fsS -o /dev/null "$URL" 2>/dev/null; then
+      PROXY_OK=1
+      break
+    fi
+    printf '.'
+    sleep 5
+    i=$((i + 1))
+  done
+  printf '\n'
+  if [ "$PROXY_OK" -eq 1 ]; then
+    say "O endereço acima já responde."
+  else
+    say "O app está saudável, mas $URL ainda não respondeu."
+    say "O Caddy pode estar esperando emitir o certificado. Veja com:"
+    say "    docker compose logs -f caddy"
+  fi
+  say ""
+fi
+
 if [ -z "$DOMAIN_VALUE" ]; then
   say "Você está com um certificado local, então o navegador vai avisar na"
   say "primeira vez. Isso é esperado numa caixa de rede local. Para acessar o"
   say "Tainá de fora da sua rede sem avisos, siga o guia de acesso remoto"
   say "(Tailscale é o caminho recomendado)."
 fi
+say ""
 say "Comandos úteis:"
 say "    docker compose logs -f app     # acompanhar os logs do app"
+say "    docker compose logs -f db      # acompanhar os logs do banco"
 say "    ./update.sh                    # atualizar para a versão mais recente"

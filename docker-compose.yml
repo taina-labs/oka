@@ -1,10 +1,22 @@
 # Taina single-box deployment. install.sh writes the .env this file reads.
 # Caddy is the only public ingress; the app speaks plain HTTP on 4000 on the
 # internal network and is never published to the host directly.
+
+# Docker's default json-file logger never rotates. On a box with a small disk
+# (an SD card is the common case) unbounded container logs fill the filesystem,
+# and PostgreSQL going read-only takes the whole community down with them. Cap
+# every service at 10 MB across 3 files.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   db:
     image: postgres:18-alpine
     restart: unless-stopped
+    logging: *logging
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-taina}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
@@ -20,7 +32,9 @@ services:
 
   app:
     image: ${TAINA_IMAGE:-ghcr.io/taina-labs/taina:latest}
-    pull_policy: always
+    # `missing`, not `always`: a locally built image (see build-image.sh) must be
+    # usable, and an offline box must still be able to `up -d` after a restart.
+    pull_policy: missing
     depends_on:
       db:
         condition: service_healthy
@@ -46,6 +60,7 @@ services:
       # Backups land here; mount a host disk/USB in production instead.
       - backups_data:/app/backups
     restart: unless-stopped
+    logging: *logging
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
       interval: 30s
@@ -56,6 +71,7 @@ services:
   caddy:
     image: caddy:2
     restart: unless-stopped
+    logging: *logging
     depends_on:
       - app
     # When TAINA_DOMAIN is set and ports 80/443 are reachable, Caddy gets a real

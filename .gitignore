@@ -5,3 +5,8 @@
 # Artefatos locais
 *.log
 .DS_Store
+
+# build-image.sh: o código-fonte clonado e o override que aponta o Compose
+# para a imagem construída na própria caixa. Ambos são da máquina, não do repo.
+taina-src/
+docker-compose.override.yml
