@@ -102,7 +102,7 @@ if ! $COMPOSE pull; then
     say "Seguindo com a imagem local."
   else
     say ""
-    say "Não consegui baixar a imagem do Tainá ($IMAGE)."
+    say "Não consegui baixar a imagem do Tainá ($IMAGE) e ela não está nesta máquina."
     say ""
     say "Se você está antes do primeiro lançamento, a imagem ainda pode não"
     say "existir no registro. Você pode montar a imagem na sua própria caixa:"
