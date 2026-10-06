@@ -88,29 +88,38 @@ fi
 # ---------------------------------------------------------------------------
 # 3. Baixar e subir os serviços.
 # ---------------------------------------------------------------------------
-step "Baixando a imagem do Tainá"
-IMAGE="$(grep '^TAINA_IMAGE=' "$ENV_FILE" 2>/dev/null | cut -d= -f2-)"
-IMAGE="${IMAGE:-ghcr.io/taina-labs/taina:latest}"
+OVERRIDE_FILE="docker-compose.override.yml"
 
-if ! $COMPOSE pull; then
-  # Uma falha no download não é sempre um problema: se a imagem já estiver
-  # local (instalação repetida, ou imagem montada com ./build-image.sh), seguimos
-  # com ela. Se não estiver, o pull_policy `missing` tentaria construir e a
-  # mensagem seria confusa, então falamos aqui com a instrução certa.
-  if docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    say "Não consegui baixar $IMAGE do registro, mas ela já está nesta máquina."
-    say "Seguindo com a imagem local."
-  else
-    say ""
-    say "Não consegui baixar a imagem do Tainá ($IMAGE) e ela não está nesta máquina."
-    say ""
-    say "Se você está antes do primeiro lançamento, a imagem ainda pode não"
-    say "existir no registro. Você pode montar a imagem na sua própria caixa:"
-    say ""
-    say "    ./build-image.sh"
-    say ""
-    say "Depois rode o ./install.sh de novo."
-    die "imagem do Tainá indisponível"
+if [ -f "$OVERRIDE_FILE" ]; then
+  # build-image.sh escreveu este override: a imagem foi montada nesta máquina e
+  # não existe no registro. Nem faz sentido tentar baixar.
+  step "Usando a imagem local (build-image.sh já rodou)"
+  say "Para voltar a usar a imagem publicada, apague o $OVERRIDE_FILE."
+else
+  step "Baixando a imagem do Tainá"
+  IMAGE="$(grep '^TAINA_IMAGE=' "$ENV_FILE" 2>/dev/null | cut -d= -f2-)"
+  IMAGE="${IMAGE:-ghcr.io/taina-labs/taina:latest}"
+
+  if ! $COMPOSE pull; then
+    # Uma falha no download nem sempre é problema: se a imagem já estiver nesta
+    # máquina (instalação repetida), seguimos com ela. Se não estiver, o
+    # pull_policy `missing` tentaria construir e a mensagem seria confusa, então
+    # falamos aqui com a instrução certa.
+    if docker image inspect "$IMAGE" >/dev/null 2>&1; then
+      say "Não consegui baixar $IMAGE do registro, mas ela já está nesta máquina."
+      say "Seguindo com a imagem local."
+    else
+      say ""
+      say "Não consegui baixar a imagem do Tainá ($IMAGE), e ela não está nesta máquina."
+      say ""
+      say "Se você está antes do primeiro lançamento, a imagem ainda pode não"
+      say "existir no registro. Você pode montar a imagem na sua própria caixa:"
+      say ""
+      say "    ./build-image.sh"
+      say ""
+      say "Depois rode o ./install.sh de novo."
+      die "imagem do Tainá indisponível"
+    fi
   fi
 fi
 
