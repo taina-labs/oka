@@ -11,6 +11,10 @@ de 30 minutos e nunca tem medo de atualizar.
 
 ## Instalação
 
+O passo a passo completo, para quem nunca fez isso, está no
+[guia de instalação](https://github.com/taina-labs/tekoa/blob/main/guias/instalacao.md).
+Resumido:
+
 Numa caixa com [Docker](https://docs.docker.com/get-docker/) e o plugin Compose:
 
 ```sh
@@ -31,6 +35,22 @@ Deixe o `TAINA_DOMAIN` vazio numa caixa de rede local ou acessada por
 Tailscale/Headscale: o Caddy usa um certificado local, e o guia de acesso
 remoto explica como ter um certificado de verdade sem domínio próprio.
 
+### Se a imagem publicada ainda não existir
+
+O `install.sh` baixa a imagem do Tainá do registro. Ela é publicada junto de
+cada release, então antes do primeiro lançamento ela ainda não está lá. Nesse
+caso, monte a imagem na sua própria máquina a partir do código:
+
+```sh
+./build-image.sh
+./install.sh
+```
+
+O `build-image.sh` clona o código do Tainá, compila a imagem localmente e
+escreve um `docker-compose.override.yml` que o Compose lê sozinho. A partir
+aí, o `install.sh` e o `update.sh` passam a usar a imagem local. Para voltar ao
+comportamento normal, apague esse arquivo.
+
 ## Atualização
 
 ```sh
@@ -38,7 +58,8 @@ remoto explica como ter um certificado de verdade sem domínio próprio.
 ```
 
 Baixa a imagem mais recente, reinicia e confere a saúde. As migrações de banco
-rodam sozinhas no boot, então atualizar é seguro.
+rodam sozinhas no boot, então atualizar é seguro. Se você montou a imagem
+localmente com o `build-image.sh`, o `update.sh` reconstrói em vez de baixar.
 
 ## O que sobe
 
@@ -54,8 +75,10 @@ Compose. Os dados ficam em volumes nomeados (`postgres_data`, `storage_data`,
 
 ## Guias do operador
 
-Documentação completa no repositório [Tekoá](https://github.com/taina-labs/tekoa):
-
+Documentação completa no repositório [Tekoá](https://github.com/taina-labs/tekoa).
+Para começar, o
+[guia de instalação](https://github.com/taina-labs/tekoa/blob/main/guias/instalacao.md),
+que é o passo a passo do zero:
 - Acesso remoto (Tailscale recomendado, Headscale soberano, WireGuard avançado):
   `guias/acesso-remoto.md`.
 - Runbook de backup e restauração (procedimento e ensaio):
