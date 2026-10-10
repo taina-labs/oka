@@ -1,5 +1,10 @@
 # Taina reverse proxy + automatic TLS.
 #
+# This is the domain-set Caddyfile: install.sh/update.sh pick it (via
+# TAINA_CADDYFILE in docker-compose.yml) when TAINA_DOMAIN is set. For a box
+# without a public domain, see Caddyfile.local instead: it serves any
+# hostname with local-CA certificates issued on demand.
+#
 # TLS is coupled to your network topology (see guias/acesso-remoto.md). The site
 # address below is {$TAINA_DOMAIN} with a default of :443:
 #

@@ -10,3 +10,7 @@
 # para a imagem construída na própria caixa. Ambos são da máquina, não do repo.
 taina-src/
 docker-compose.override.yml
+
+# update.sh: o backup pré-atualização do banco (e o registro da imagem
+# anterior). Fica na máquina, não no repo.
+rollback/

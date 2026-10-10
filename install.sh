@@ -81,6 +81,17 @@ POSTGRES_DB=taina
 
 # Backups agendados. Mude para true depois de montar um disco de backup.
 BACKUP_ENABLED=false
+
+# Aviso de versão nova. O app confere se existe atualização do Tainá e avisa
+# na interface. Deixe false se a caixa não deve sair procurando nada.
+TAINA_UPDATE_CHECK=false
+
+# Diretórios de dados no host. Por padrão são volumes nomeados do Docker
+# (storage_data e backups_data). Preencha com um caminho da caixa (ex.:
+# /mnt/disco/taina) para guardar uploads ou backups num disco próprio, e dê
+# o diretório ao usuário 65534:65534, que é como o app roda no container.
+#TAINA_STORAGE_DIR=
+#TAINA_BACKUP_DIR=
 EOF
   say "Escrevi o $ENV_FILE (só você consegue ler)."
 fi
@@ -88,6 +99,17 @@ fi
 # ---------------------------------------------------------------------------
 # 3. Baixar e subir os serviços.
 # ---------------------------------------------------------------------------
+# O Caddy carrega a configuração apontada em TAINA_CADDYFILE: com domínio
+# público, o Caddyfile (ouvindo no domínio, com Let's Encrypt); sem domínio,
+# o Caddyfile.local, que emite certificados locais sob demanda. O compose tem
+# o mesmo padrão (Caddyfile.local) para quem sobe os serviços na mão.
+DOMAIN_VALUE="$(grep '^TAINA_DOMAIN=' "$ENV_FILE" | cut -d= -f2-)"
+if [ -n "$DOMAIN_VALUE" ]; then
+  export TAINA_CADDYFILE="Caddyfile"
+else
+  export TAINA_CADDYFILE="Caddyfile.local"
+fi
+
 OVERRIDE_FILE="docker-compose.override.yml"
 
 if [ -f "$OVERRIDE_FILE" ]; then
@@ -134,7 +156,8 @@ $COMPOSE up -d
 # PostgreSQL respondeu, que é a condição que install.sh precisa confirmar. Não
 # depende de curl no host, nem de certificado, nem de o Caddy já ter emitido o
 # certificado dele (com TAINA_DOMAIN, o Caddy serve só aquele domínio, então
-# sondar https://localhost nunca bateria, e a porta 4000 não é publicada).
+# sondar https://localhost nunca bateria; e a porta 4000 do app, publicada só
+# no loopback da caixa, não muda a conta).
 #
 # O Caddy é conferido depois, em separado e sem matar a instalação: emitir um
 # certificado Let's Encrypt leva dezenas de segundos e não é motivo para
@@ -163,7 +186,6 @@ fi
 # ---------------------------------------------------------------------------
 # 5. Dizer para o operador o próximo passo.
 # ---------------------------------------------------------------------------
-DOMAIN_VALUE="$(grep '^TAINA_DOMAIN=' "$ENV_FILE" | cut -d= -f2-)"
 if [ -n "$DOMAIN_VALUE" ]; then
   URL="https://$DOMAIN_VALUE/setup"
 else
@@ -182,10 +204,19 @@ say ""
 # emitindo o certificado.
 if command -v curl >/dev/null 2>&1; then
   say "Conferindo o proxy reverso (na primeira vez leva alguns segundos)..."
+  # Sem domínio, o certificado é do CA local: o curl do host não confia nele,
+  # então a sondagem usa -k para não dar falso negativo (o aviso honesto de
+  # que o navegador vai reclamar continua no fim). Com domínio, o certificado
+  # é de verdade e a sondagem confere como um navegador conferiria.
+  if [ -n "$DOMAIN_VALUE" ]; then
+    CURL_FLAGS="-fsS"
+  else
+    CURL_FLAGS="-fsSk"
+  fi
   PROXY_OK=0
   i=1
   while [ "$i" -le 24 ]; do
-    if curl -fsS -o /dev/null "$URL" 2>/dev/null; then
+    if curl $CURL_FLAGS -o /dev/null "$URL" 2>/dev/null; then
       PROXY_OK=1
       break
     fi
@@ -209,6 +240,13 @@ if [ -z "$DOMAIN_VALUE" ]; then
   say "primeira vez. Isso é esperado numa caixa de rede local. Para acessar o"
   say "Tainá de fora da sua rede sem avisos, siga o guia de acesso remoto"
   say "(Tailscale é o caminho recomendado)."
+  say ""
+  say "De outra máquina, alcance a caixa pelo endereço dela na sua rede (ex.:"
+  say "https://192.168.1.10). A porta 4000 do app fica publicada só no"
+  say "127.0.0.1 da própria caixa: é daí que o 'tailscale serve --bg 4000'"
+  say "serve o Tainá. Usando Tailscale, escreva o nome MagicDNS da caixa no"
+  say "PHX_HOST do .env (ex.: PHX_HOST=taina.sua-caixa.ts.net) e rode"
+  say "./update.sh, para que convites e links saiam com o endereço certo."
 fi
 say ""
 say "Comandos úteis:"
