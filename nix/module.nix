@@ -204,7 +204,7 @@ in
     users.users.taina = {
       isSystemUser = true;
       group = "taina";
-      home = dataDir;
+      home = cfg.dataDir;
       description = "taina community server";
     };
     users.groups.taina = { };
@@ -271,7 +271,7 @@ in
         Type = "exec";
         User = "taina";
         Group = "taina";
-        WorkingDirectory = dataDir;
+        WorkingDirectory = cfg.dataDir;
         EnvironmentFile = [ envFile ];
         # Migrations run before the server, the same order the release image
         # uses; they create and migrate the SQLite file on first boot.
