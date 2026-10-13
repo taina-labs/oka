@@ -99,8 +99,8 @@ test "docker: domain verbs forward to bin/taina eval" {
     try testing.expectEqual(@as(u8, 0), try main.run(ctx.host, &.{"doctor"}));
     try testutil.Ctx.expectTail(try ctx.lastInvocation(), &.{ "/app/bin/taina", "eval", "Taina.CLI.main([\"doctor\"])" });
 
-    try testing.expectEqual(@as(u8, 0), try main.run(ctx.host, &.{ "restore", "b.tar.gz" }));
-    try testutil.Ctx.expectTail(try ctx.lastInvocation(), &.{ "/app/bin/taina", "eval", "Taina.CLI.main([\"restore\", \"b.tar.gz\"])" });
+    try testing.expectEqual(@as(u8, 0), try main.run(ctx.host, &.{"backup"}));
+    try testutil.Ctx.expectTail(try ctx.lastInvocation(), &.{ "/app/bin/taina", "eval", "Taina.CLI.main([\"backup\"])" });
 }
 
 test "systemd: status and logs go through systemctl and journalctl" {
@@ -142,4 +142,60 @@ test "exit codes propagate from the runtime" {
     defer ctx.deinit();
     try ctx.env.put("TAINA_FAKE_EXIT", "1");
     try testing.expectEqual(@as(u8, 1), try main.run(ctx.host, &.{"down"}));
+}
+
+test "docker: restore stops the app, runs a one-off, then starts it" {
+    var ctx = try testutil.Ctx.init();
+    defer ctx.deinit();
+
+    try testing.expectEqual(@as(u8, 0), try main.run(ctx.host, &.{ "restore", "b.tar.gz" }));
+
+    const invs = try ctx.invocations();
+    var stop_at: ?usize = null;
+    var run_at: ?usize = null;
+    var start_at: ?usize = null;
+    for (invs, 0..) |inv, i| {
+        if (inv.len < 1) continue;
+        if (std.mem.eql(u8, inv[0], "exec")) return error.TestUnexpectedResult;
+        if (std.mem.eql(u8, inv[0], "stop")) stop_at = i;
+        if (std.mem.eql(u8, inv[0], "start")) start_at = i;
+        if (std.mem.eql(u8, inv[0], "run")) {
+            run_at = i;
+            try testutil.Ctx.expectArg(inv, "--rm");
+            try testutil.Ctx.expectArg(inv, "--volumes-from");
+            try testutil.Ctx.expectArg(inv, "ghcr.io/taina-labs/taina:latest");
+            try testutil.Ctx.expectTail(inv, &.{ "/app/bin/taina", "eval", "Taina.CLI.main([\"restore\", \"b.tar.gz\"])" });
+        }
+    }
+    try testing.expect(stop_at != null);
+    try testing.expect(run_at != null);
+    try testing.expect(start_at != null);
+    try testing.expect(stop_at.? < run_at.?);
+    try testing.expect(run_at.? < start_at.?);
+}
+
+test "systemd: restore stops the unit and runs the release one-off" {
+    var ctx = try testutil.Ctx.init();
+    defer ctx.deinit();
+    try ctx.env.put("TAINA_BACKEND", "systemd");
+    try ctx.env.put("TAINA_RELEASE", try ctx.makeRelease());
+
+    try testing.expectEqual(@as(u8, 0), try main.run(ctx.host, &.{ "restore", "b.tar.gz" }));
+
+    const invs = try ctx.invocations();
+    var saw_stop = false;
+    var saw_start = false;
+    var saw_eval = false;
+    for (invs) |inv| {
+        if (inv.len < 1) continue;
+        if (std.mem.eql(u8, inv[0], "stop")) saw_stop = true;
+        if (std.mem.eql(u8, inv[0], "start")) saw_start = true;
+        if (std.mem.eql(u8, inv[0], "eval")) {
+            saw_eval = true;
+            try testutil.Ctx.expectTail(inv, &.{ "eval", "Taina.CLI.main([\"restore\", \"b.tar.gz\"])" });
+        }
+    }
+    try testing.expect(saw_stop);
+    try testing.expect(saw_start);
+    try testing.expect(saw_eval);
 }

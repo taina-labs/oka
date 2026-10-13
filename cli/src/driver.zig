@@ -26,6 +26,7 @@ pub const Health = enum { healthy, degraded };
 pub const Docker = struct {
     container: []const u8 = "taina-app",
     network: []const u8 = "taina",
+    image: []const u8 = "",
 };
 
 pub const Systemd = struct {
@@ -104,6 +105,15 @@ pub const Driver = union(Kind) {
         return switch (self) {
             .docker => |d| dockerRunOnce(host, d, ro),
             .systemd => |d| systemdRunOnce(host, d, ro),
+        };
+    }
+
+    /// restore is not a plain forward: it replaces the database file, so the
+    /// app has to be stopped first and the verb runs in a one-off.
+    pub fn restore(self: Driver, host: *proc.Host, argv: []const []const u8) Error!u8 {
+        return switch (self) {
+            .docker => |d| dockerRestore(host, d, argv),
+            .systemd => |d| systemdRestore(host, d, argv),
         };
     }
 
@@ -228,6 +238,39 @@ fn dockerRunOnce(host: *proc.Host, d: Docker, ro: RunOnce) Error!u8 {
     return host.run(&.{ host.progs.docker, "exec", d.container, "/app/bin/taina", "eval", expr });
 }
 
+fn dockerRestore(host: *proc.Host, d: Docker, argv: []const []const u8) Error!u8 {
+    host.step("parando o Taina (o restore troca o arquivo do banco)", .{});
+    const stop_code = try host.run(&.{ host.progs.docker, "stop", d.container });
+    if (stop_code != 0) return stop_code;
+
+    const image = try imageOf(host, d);
+    const expr = try evalExpr(host, .{ .verb = "restore", .argv = argv });
+    const code: u8 = host.run(&.{
+        host.progs.docker, "run", "--rm", "--volumes-from", d.container, image, "/app/bin/taina", "eval", expr,
+    }) catch {
+        _ = host.run(&.{ host.progs.docker, "start", d.container }) catch {};
+        return error.DriverFailed;
+    };
+
+    host.step("subindo o Taina de novo", .{});
+    const start_code = try host.run(&.{ host.progs.docker, "start", d.container });
+    if (code != 0) return code;
+    return start_code;
+}
+
+/// The image the running container was started from, so the restore one-off
+/// matches the code the box runs. Falls back to the configured image.
+fn imageOf(host: *proc.Host, d: Docker) Error![]const u8 {
+    const inspect = [_][]const u8{ host.progs.docker, "inspect", "--format", "{{.Config.Image}}", d.container };
+    const cap = try host.capture(&inspect);
+    defer host.freeCapture(cap);
+    const found = cap.line();
+    if (cap.ok() and found.len > 0) return host.gpa.dupe(u8, found) catch error.OutOfMemory;
+    if (d.image.len > 0) return d.image;
+    host.err("nao consegui descobrir a imagem do container '{s}'. Aponte TAINA_IMAGE.", .{d.container});
+    return error.DriverFailed;
+}
+
 fn dockerDescribe(host: *proc.Host, d: Docker, cfg: *const config.Config) Error!u8 {
     host.out("backend: docker", .{});
     host.out("container: {s}", .{d.container});
@@ -349,11 +392,29 @@ fn systemdUpdate(host: *proc.Host) Error!u8 {
 
 fn systemdRunOnce(host: *proc.Host, d: Systemd, ro: RunOnce) Error!u8 {
     const expr = try evalExpr(host, ro);
-    const bin = if (d.release.len > 0)
-        (std.fmt.allocPrint(host.gpa, "{s}/bin/taina", .{d.release}) catch return error.OutOfMemory)
-    else
-        "taina";
-    return host.run(&.{ bin, "eval", expr });
+    return host.run(&.{ try releaseBin(host, d), "eval", expr });
+}
+
+fn systemdRestore(host: *proc.Host, d: Systemd, argv: []const []const u8) Error!u8 {
+    host.step("parando o Taina (o restore troca o arquivo do banco)", .{});
+    const stop_code = try host.run(&.{ host.progs.systemctl, "stop", d.unit });
+    if (stop_code != 0) return stop_code;
+
+    const expr = try evalExpr(host, .{ .verb = "restore", .argv = argv });
+    const code: u8 = host.run(&.{ try releaseBin(host, d), "eval", expr }) catch {
+        _ = host.run(&.{ host.progs.systemctl, "start", d.unit }) catch {};
+        return error.DriverFailed;
+    };
+
+    host.step("subindo o Taina de novo", .{});
+    const start_code = try host.run(&.{ host.progs.systemctl, "start", d.unit });
+    if (code != 0) return code;
+    return start_code;
+}
+
+fn releaseBin(host: *proc.Host, d: Systemd) Error![]const u8 {
+    if (d.release.len > 0) return std.fmt.allocPrint(host.gpa, "{s}/bin/taina", .{d.release}) catch error.OutOfMemory;
+    return "taina";
 }
 
 fn systemdDescribe(host: *proc.Host, d: Systemd) Error!u8 {

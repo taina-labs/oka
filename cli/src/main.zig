@@ -28,7 +28,7 @@ const usage_text =
     \\
     \\Dominio (roda dentro da release):
     \\  backup [--out DIR]        backup (banco + storage)
-    \\  restore <arquivo.tar.gz>  restauracao (pare a caixa antes)
+    \\  restore <arquivo.tar.gz>  restauracao (a CLI para o Taina e volta)
     \\  doctor                    diagnostico da caixa
     \\
     \\Environment: TAINA_BACKEND TAINA_CONFIG TAINA_IMAGE TAINA_CONTAINER
@@ -131,7 +131,7 @@ fn dispatch(host: *proc.Host, cmd: []const []const u8) Error!u8 {
     if (std.mem.eql(u8, name, "backend")) return backendCmd(host, rest);
     // Domain verbs: the release owns the logic; the driver forwards them.
     if (std.mem.eql(u8, name, "backup")) return forward(host, "backup", rest);
-    if (std.mem.eql(u8, name, "restore")) return forward(host, "restore", rest);
+    if (std.mem.eql(u8, name, "restore")) return restoreCmd(host, rest);
     if (std.mem.eql(u8, name, "doctor")) return forward(host, "doctor", rest);
     _ = try usage(host, "comando desconhecido '{s}'", .{name});
     return error.Usage;
@@ -237,6 +237,14 @@ fn forward(host: *proc.Host, verb: []const u8, args: []const []const u8) Error!u
     return d.runOnce(host, .{ .verb = verb, .argv = args });
 }
 
+/// restore replaces the database file, so the driver stops the app first.
+fn restoreCmd(host: *proc.Host, args: []const []const u8) Error!u8 {
+    if (args.len == 0) return usage(host, "'restore' precisa do caminho do arquivo de backup", .{});
+    var cfg = config.load(host, config_path);
+    const d = try detectDriver(host, &cfg);
+    return d.restore(host, args);
+}
+
 fn parseKind(value: []const u8) ?driver.Kind {
     if (std.mem.eql(u8, value, "docker")) return .docker;
     if (std.mem.eql(u8, value, "systemd")) return .systemd;
@@ -269,7 +277,7 @@ fn detectDriver(host: *proc.Host, cfg: *const config.Config) Error!driver.Driver
 
 fn explicit(host: *proc.Host, cfg: *const config.Config, k: driver.Kind) Error!driver.Driver {
     return switch (k) {
-        .docker => driver.Driver{ .docker = .{ .container = cfg.container, .network = cfg.network } },
+        .docker => driver.Driver{ .docker = .{ .container = cfg.container, .network = cfg.network, .image = cfg.image } },
         .systemd => driver.Driver{ .systemd = .{ .unit = "taina", .release = host.get("TAINA_RELEASE") orelse "" } },
     };
 }
