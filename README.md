@@ -1,107 +1,131 @@
 # Oka
 
 > Em Tupi, _oka_ é a casa. Este repositório é a casa do [Tainá](https://github.com/taina-labs/taina):
-> a orquestração que coloca o servidor da sua comunidade no ar numa caixa
-> (Raspberry Pi, mini PC ou VPS).
+> a CLI `taina`, que opera o servidor da sua comunidade numa caixa (Raspberry
+> Pi, mini PC ou VPS), e o módulo NixOS para quem roda Nix.
 
-O Oka não contém o código do Tainá. Ele baixa a imagem publicada e sobe tudo
-com um comando: a aplicação e um proxy reverso com HTTPS automático. É o "deploy
-é produto": uma comunidade não-técnica instala em menos de 30 minutos e nunca
-tem medo de atualizar.
+O Oka não contém o código do Tainá. Ele traz a CLI `taina`, que baixa a imagem
+publicada e sobe tudo com um comando. É o "deploy é produto": uma comunidade
+não-técnica instala em menos de 30 minutos e nunca tem medo de atualizar.
 
 ## Instalação
 
 O passo a passo completo, para quem nunca fez isso, está no
 [guia de instalação](https://github.com/taina-labs/tekoa/blob/main/guias/instalacao.md).
-Resumido:
-
-Numa caixa com [Docker](https://docs.docker.com/get-docker/) e o plugin Compose:
+Resumido, numa caixa com [Docker](https://docs.docker.com/get-docker/):
 
 ```sh
-git clone https://github.com/taina-labs/oka.git
-cd oka
-./install.sh
+# a CLI, por Nix (ou baixe o binário da release)
+nix build github:taina-labs/oka
+sudo install -m755 result/bin/taina /usr/local/bin/taina
+
+# sobe o Tainá
+taina setup
 ```
 
-O instalador gera os segredos, escreve o `.env`, sobe os serviços e imprime o
-endereço do assistente de configuração. Para um domínio público com certificado
-real (Let's Encrypt automático):
+O `setup` gera o segredo em `taina.conf`, cria a rede, sobe o container do Tainá
+(a imagem `ghcr.io/taina-labs/taina`) e imprime o endereço do assistente de
+configuração. Sem domínio, use `taina setup --domain nuvem.suacomunidade.org`
+para o `PHX_HOST` das URLs.
 
-```sh
-TAINA_DOMAIN=nuvem.suacomunidade.org ./install.sh
-```
+### Expor ao mundo
 
-Deixe o `TAINA_DOMAIN` vazio numa caixa de rede local ou acessada por
-Tailscale/Headscale: o Caddy usa um certificado local, e o guia de acesso
-remoto explica como ter um certificado de verdade sem domínio próprio.
+A CLI **não configura TLS**, e isso é uma decisão: quem expõe a caixa é você.
+
+- **Tailscale (recomendado).** `tailscale serve --bg 4000` publica a caixa com
+  HTTPS de verdade, sem abrir porta nenhuma. Veja o
+  [guia de acesso remoto](https://github.com/taina-labs/tekoa/blob/main/guias/acesso-remoto.md).
+- **Seu proxy** (Caddy, nginx, cloudflared, ...) na frente do `127.0.0.1:4000`.
+  O `deploy/Caddyfile` é um exemplo de Caddy com Let's Encrypt.
 
 ### Se a imagem publicada ainda não existir
 
-O `install.sh` baixa a imagem do Tainá do registro. Ela é publicada junto de
-cada release, então antes do primeiro lançamento ela ainda não está lá. Nesse
-caso, monte a imagem na sua própria máquina a partir do código:
+O `setup` baixa a imagem do registro. Para montar a imagem na própria caixa, a
+partir do código:
 
 ```sh
 ./build-image.sh
-./install.sh
+TAINA_IMAGE=taina:local taina setup
 ```
 
-O `build-image.sh` clona o código do Tainá, compila a imagem localmente e
-escreve um `docker-compose.override.yml` que o Compose lê sozinho. A partir
-aí, o `install.sh` e o `update.sh` passam a usar a imagem local. Para voltar ao
-comportamento normal, apague esse arquivo.
+## Comandos
 
-### Se a caixa já rodou o compose antigo (com PostgreSQL)
-
-O Tainá passou a guardar tudo num arquivo SQLite que o app mesmo cuida
-(`/app/data/taina.db`); não há mais serviço de banco de dados. Uma caixa que
-rodou o compose anterior tem os dados num volume `postgres_data`, que a versão
-nova não lê. Antes do primeiro lançamento estável não há dados reais a perder,
-então comece do zero:
-
-```sh
-docker compose down -v
-./install.sh
 ```
+taina setup [--domain D]     instala e sobe o Taina
+taina up | down | restart    sobe, para (os dados ficam) e reinicia
+taina update [--tag T]       baixa e sobe a versao nova (guarda rollback)
+taina status                 estado do servico
+taina logs [-f] [--tail N]   logs
+taina health                 checa /health
+taina backend                imprime o backend e os caminhos
+taina backup [--out DIR]     backup (banco + storage)
+taina restore <arquivo>      restauracao (a CLI para o Taina e volta)
+taina doctor                 diagnostico da caixa
+taina version                versao da CLI
+```
+
+Config no `taina.conf` (chave=valor), sobrescrita pelo ambiente: `TAINA_IMAGE`,
+`TAINA_DOMAIN`, `TAINA_DB_DIR`, `TAINA_STORAGE_DIR`, `TAINA_BACKUP_DIR` (vazios
+usam volumes nomeados), `SECRET_KEY_BASE`.
 
 ## Atualização
 
 ```sh
-./update.sh
+taina update
 ```
 
-Baixa a imagem mais recente, reinicia e confere a saúde. As migrações de banco
-rodam sozinhas no boot, então atualizar é seguro. Antes de reiniciar, o
-`update.sh` guarda uma cópia do banco em `rollback/` e anota a imagem que
-estava no ar: se a versão nova não voltar a ficar saudável, as instruções
-exatas de reversão aparecem na saída do script. Se você montou a imagem
-localmente com o `build-image.sh`, o `update.sh` reconstrói em vez de baixar.
+Baixa a imagem nova, guarda uma cópia do banco em `rollback/`, recria o
+container e confere a saúde. As migrações rodam sozinhas no boot.
+
+## Backup e restauração
+
+```sh
+taina backup --out /mnt/usb
+taina restore /mnt/usb/taina-backup-AAAAMMDDTHHMMSSZ.tar.gz
+```
+
+O `restore` para o Tainá, roda a restauração num container avulso sobre os
+mesmos dados (o arquivo do banco é substituído, então nada pode estar aberto) e
+sobe de novo. O `backup` roda com o Tainá no ar.
+
+O procedimento completo e o ensaio (drill) estão no
+[runbook de backup](https://github.com/taina-labs/tekoa/blob/main/guias/runbook-backup-restore.md).
 
 ## O que sobe
 
 | Serviço | Papel |
 | --- | --- |
-| `app` | a aplicação Tainá (imagem `ghcr.io/taina-labs/taina`), com o banco SQLite |
-| `caddy` | proxy reverso, única porta de entrada, HTTPS automático |
+| `taina-app` | o Tainá, com o banco SQLite num arquivo |
 
-Apenas o Caddy fica exposto à rede. A aplicação também responde em
-`127.0.0.1:4000`, mas só dentro da própria caixa: é esse endereço que o
-`tailscale serve` usa para publicar o Tainá sem abrir portas. Os dados ficam
-em volumes nomeados (`db_data`, `storage_data`, `backups_data`) ou nos
-diretórios do host apontados em `TAINA_DB_DIR`, `TAINA_STORAGE_DIR` e
-`TAINA_BACKUP_DIR` no `.env`, e persistem entre reinícios e atualizações.
+Só o container do app. A rede `taina`, os dados em volumes nomeados (`taina_db`,
+`taina_storage`, `taina_backups`) ou em discos apontados no `taina.conf`, e o
+`127.0.0.1:4000` publicado só no loopback (é o que o `tailscale serve` usa).
 
-Quem sobe os serviços na mão (`docker compose up -d`, sem os scripts) fica com
-o `Caddyfile.local` por padrão; numa caixa com domínio público, exporte
-`TAINA_CADDYFILE=Caddyfile` antes, que é o que o `install.sh` e o `update.sh`
-fazem por você.
+## NixOS
+
+O `services.taina` roda o Tainá como serviço systemd, sem container, e põe a CLI
+no PATH:
+
+```nix
+{
+  inputs.oka.url = "github:taina-labs/oka";
+  # ...
+  services.taina = {
+    enable = true;
+    hostname = "nuvem.suacomunidade.org";
+  };
+}
+```
+
+No NixOS o update é `nixos-rebuild switch`; a CLI continua servindo para
+`status`, `logs`, `restart`, `backup`, `restore` e `doctor`.
 
 ## Guias do operador
 
 Documentação completa no repositório [Tekoá](https://github.com/taina-labs/tekoa).
 Para começar, o
-[guia de instalação](https://github.com/taina-labs/tekoa/blob/main/guias/instalacao.md),
-que é o passo a passo do zero:
+[guia de instalação](https://github.com/taina-labs/tekoa/blob/main/guias/instalacao.md):
+
 - [Acesso remoto](https://github.com/taina-labs/tekoa/blob/main/guias/acesso-remoto.md)
   (Tailscale recomendado, Headscale soberano, WireGuard avançado).
 - [Runbook de backup e restauração](https://github.com/taina-labs/tekoa/blob/main/guias/runbook-backup-restore.md)
