@@ -1,0 +1,13 @@
+.{
+    .name = .taina,
+    .version = "0.1.0",
+    .fingerprint = 0xcf27c63c5562fb2b,
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "root.zig",
+        "src",
+    },
+}
