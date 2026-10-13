@@ -17,6 +17,7 @@ pub const Config = struct {
     backup_dir: []const u8 = "",
     secret: []const u8 = "",
     update_check: bool = false,
+    backup_enabled: bool = false,
 };
 
 pub fn load(host: *proc.Host, path: []const u8) Config {
@@ -34,6 +35,7 @@ pub fn load(host: *proc.Host, path: []const u8) Config {
     if (host.get("SECRET_KEY_BASE")) |v| cfg.secret = v;
     if (host.get("TAINA_HOST_PORT")) |v| cfg.host_port = std.fmt.parseInt(u16, v, 10) catch cfg.host_port;
     if (host.get("TAINA_UPDATE_CHECK")) |v| cfg.update_check = isTrue(v);
+    if (host.get("TAINA_BACKUP_ENABLED")) |v| cfg.backup_enabled = isTrue(v);
     return cfg;
 }
 
@@ -69,6 +71,8 @@ fn parse(cfg: *Config, content: []const u8) void {
             cfg.host_port = std.fmt.parseInt(u16, val, 10) catch cfg.host_port;
         } else if (std.mem.eql(u8, key, "TAINA_UPDATE_CHECK")) {
             cfg.update_check = isTrue(val);
+        } else if (std.mem.eql(u8, key, "TAINA_BACKUP_ENABLED")) {
+            cfg.backup_enabled = isTrue(val);
         }
     }
 }
@@ -90,8 +94,8 @@ pub fn save(host: *proc.Host, cfg: *const Config) proc.Error!void {
 
     const rest = std.fmt.allocPrint(
         g,
-        "TAINA_HOST_PORT={d}\nTAINA_UPDATE_CHECK={s}\n",
-        .{ cfg.host_port, if (cfg.update_check) "true" else "false" },
+        "TAINA_HOST_PORT={d}\nTAINA_UPDATE_CHECK={s}\nTAINA_BACKUP_ENABLED={s}\n",
+        .{ cfg.host_port, if (cfg.update_check) "true" else "false", if (cfg.backup_enabled) "true" else "false" },
     ) catch return error.OutOfMemory;
     try out.appendSlice(g, rest);
 

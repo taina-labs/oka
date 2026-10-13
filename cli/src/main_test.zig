@@ -49,6 +49,7 @@ test "docker: status, logs and lifecycle go through docker" {
 test "docker: setup writes the config and runs the container" {
     var ctx = try testutil.Ctx.init();
     defer ctx.deinit();
+    try ctx.env.put("TAINA_BACKUP_ENABLED", "true");
 
     try testing.expectEqual(@as(u8, 0), try main.run(ctx.host, &.{ "setup", "--domain", "nuvem.local" }));
 
@@ -70,6 +71,11 @@ test "docker: setup writes the config and runs the container" {
     defer testing.allocator.free(cfg);
     try testing.expect(std.mem.indexOf(u8, cfg, "SECRET_KEY_BASE=") != null);
     try testing.expect(std.mem.indexOf(u8, cfg, "TAINA_DOMAIN=nuvem.local") != null);
+
+    // The backup switch crossed the container boundary via the env-file.
+    const log = try std.Io.Dir.cwd().readFileAlloc(ctx.host.io, ctx.log_path, testing.allocator, .limited(1 << 20));
+    defer testing.allocator.free(log);
+    try testing.expect(std.mem.indexOf(u8, log, "ENVFILE:BACKUP_ENABLED=true") != null);
 }
 
 test "docker: update pulls the tag and recreates" {

@@ -318,12 +318,12 @@ fn writeContainerEnv(host: *proc.Host, cfg: *const config.Config, dir: []const u
         \\PHX_SERVER=true
         \\PORT=4000
         \\STORAGE_ROOT=/app/storage
-        \\BACKUP_ENABLED=false
+        \\BACKUP_ENABLED={s}
         \\BACKUP_DIR=/app/backups
         \\TAINA_UPDATE_CHECK={s}
         \\SECRET_KEY_BASE={s}
         \\
-    , .{ phx_host, if (cfg.update_check) "true" else "false", cfg.secret }) catch return error.OutOfMemory;
+    , .{ phx_host, if (cfg.backup_enabled) "true" else "false", if (cfg.update_check) "true" else "false", cfg.secret }) catch return error.OutOfMemory;
     try out.appendSlice(g, body);
     Io.Dir.cwd().writeFile(host.io, .{ .sub_path = path, .data = out.items }) catch return error.DriverFailed;
     Io.Dir.cwd().setFilePermissions(host.io, path, .fromMode(0o600), .{}) catch {};
