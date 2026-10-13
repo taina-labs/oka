@@ -16,7 +16,17 @@ cli="$root/cli/zig-out/bin/taina"
 work="$(mktemp -d)"
 container="taina-smoke-$$"
 image="${TAINA_IMAGE:-ghcr.io/taina-labs/taina:latest}"
-trap 'docker rm -f "$container" >/dev/null 2>&1 || true; docker network rm "$TAINA_NETWORK" >/dev/null 2>&1 || true; rm -rf "$work"' EXIT
+
+# The app writes as nobody (65534), so the host data dirs it touched are not
+# ours to rm: clear them as root through the same image, then drop $work.
+cleanup() {
+  docker rm -f "$container" >/dev/null 2>&1 || true
+  docker network rm "$TAINA_NETWORK" >/dev/null 2>&1 || true
+  docker run --rm --user root -v "$work":/w --entrypoint /bin/sh "$image" \
+    -c 'rm -rf /w/db /w/storage /w/backups' >/dev/null 2>&1 || true
+  rm -rf "$work"
+}
+trap cleanup EXIT
 
 command -v docker >/dev/null 2>&1 || { echo "smoke needs docker"; exit 1; }
 docker info >/dev/null 2>&1 || { echo "smoke needs docker running"; exit 1; }
