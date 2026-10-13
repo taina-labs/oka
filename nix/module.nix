@@ -33,11 +33,9 @@ let
     escapeShellArg
     ;
 
-  dataDir = "/var/lib/taina";
-
   # The env file the app reads. When the operator points at their own file, the
   # module never generates or touches it.
-  envFile = if cfg.environmentFile != null then cfg.environmentFile else "${dataDir}/taina.env";
+  envFile = if cfg.environmentFile != null then cfg.environmentFile else "${cfg.dataDir}/taina.env";
 
   # Generated on first boot only when the operator did not bring their own.
   generateSecrets = cfg.environmentFile == null;
@@ -136,21 +134,31 @@ in
       '';
     };
 
+    dataDir = mkOption {
+      type = types.path;
+      default = "/var/lib/taina";
+      description = ''
+        Root directory holding the whole server state (database, storage and
+        backups). Point it at a data disk (a ZFS dataset, a mounted USB disk) to
+        keep the state off the system disk.
+      '';
+    };
+
     dbDir = mkOption {
       type = types.path;
-      default = "${dataDir}/db";
+      default = "${cfg.dataDir}/db";
       description = "Directory holding the SQLite database file (taina.db inside it).";
     };
 
     storageDir = mkOption {
       type = types.path;
-      default = "${dataDir}/storage";
+      default = "${cfg.dataDir}/storage";
       description = "Directory holding Ybira uploads and renditions.";
     };
 
     backupDir = mkOption {
       type = types.path;
-      default = "${dataDir}/backups";
+      default = "${cfg.dataDir}/backups";
       description = "Directory Nhaman writes scheduled backups to.";
     };
 
@@ -210,7 +218,7 @@ in
     };
 
     systemd.tmpfiles.rules = [
-      "d '${dataDir}' 0700 taina taina -"
+      "d '${cfg.dataDir}' 0700 taina taina -"
       "d '${cfg.dbDir}' 0700 taina taina -"
       "d '${cfg.storageDir}' 0700 taina taina -"
       "d '${cfg.backupDir}' 0700 taina taina -"
@@ -237,6 +245,7 @@ in
       # The data directories are often their own mount (a ZFS dataset); wait for
       # them rather than writing to the empty mountpoint on root.
       unitConfig.RequiresMountsFor = [
+        cfg.dataDir
         cfg.dbDir
         cfg.storageDir
         cfg.backupDir
