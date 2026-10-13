@@ -7,4 +7,6 @@ test {
     _ = @import("src/proc.zig");
     _ = @import("src/config.zig");
     _ = @import("src/driver.zig");
+    _ = @import("src/testutil.zig");
+    _ = @import("src/main_test.zig");
 }

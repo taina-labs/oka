@@ -1,0 +1,14 @@
+#!/bin/sh
+# Fake `systemctl` for the Zig driver tests. Logs argv like the docker shim
+# and answers the probes (cat/is-active).
+log="${TAINA_FAKE_LOG:?TAINA_FAKE_LOG must be set}"
+{
+  for a in "$@"; do printf '%s\n' "$a"; done
+  printf '\n'
+} >>"$log"
+
+case "$1" in
+  cat) exit "${TAINA_FAKE_UNIT_EXISTS:-0}" ;;
+  is-active) printf '%s\n' "${TAINA_FAKE_ACTIVE:-active}" ;;
+esac
+exit 0

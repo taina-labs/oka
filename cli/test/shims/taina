@@ -1,0 +1,10 @@
+#!/bin/sh
+# Fake release binary for the systemd backend's domain forward:
+# `<release>/bin/taina eval 'Taina.CLI.main([...])'`. Logs argv and exits with
+# $TAINA_FAKE_EXIT.
+log="${TAINA_FAKE_LOG:?TAINA_FAKE_LOG must be set}"
+{
+  for a in "$@"; do printf '%s\n' "$a"; done
+  printf '\n'
+} >>"$log"
+exit "${TAINA_FAKE_EXIT:-0}"

@@ -1,0 +1,28 @@
+#!/bin/sh
+# Fake `docker` for the Zig driver tests. Logs its argv (one argument per
+# line, invocation terminated by an empty line) to $TAINA_FAKE_LOG, then
+# answers the probes the CLI makes.
+log="${TAINA_FAKE_LOG:?TAINA_FAKE_LOG must be set}"
+{
+  prev=""
+  for a in "$@"; do
+    printf '%s\n' "$a"
+    # Surface the --env-file so tests can assert what crossed the boundary.
+    [ "$prev" = "--env-file" ] && sed 's/^/ENVFILE:/' "$a" 2>/dev/null
+    prev="$a"
+  done
+  printf '\n'
+} >>"$log"
+
+if [ "$1" = "inspect" ]; then
+  # TAINA_FAKE_NO_CONTAINER makes the container look absent (setup/update).
+  [ -n "${TAINA_FAKE_NO_CONTAINER:-}" ] && exit 1
+  case "$*" in
+    *State.Status*) printf '%s\n' "${TAINA_FAKE_STATUS:-running}" ;;
+    *Id*) printf 'a1b2c3d4\n' ;;
+  esac
+  exit 0
+fi
+
+# run/start/stop/restart/rm/pull/logs/exec/cp/network: exit-code knob.
+exit "${TAINA_FAKE_EXIT:-0}"

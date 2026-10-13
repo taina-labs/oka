@@ -1,0 +1,9 @@
+#!/bin/sh
+# Fake `curl` for the Zig driver tests. Logs argv and exits with
+# $TAINA_FAKE_CURL_EXIT (default 0 = healthy).
+log="${TAINA_FAKE_LOG:?TAINA_FAKE_LOG must be set}"
+{
+  for a in "$@"; do printf '%s\n' "$a"; done
+  printf '\n'
+} >>"$log"
+exit "${TAINA_FAKE_CURL_EXIT:-0}"

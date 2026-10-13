@@ -165,7 +165,7 @@ fn dockerLogs(host: *proc.Host, d: Docker, opts: LogOpts) Error!u8 {
 fn dockerHealth(host: *proc.Host, d: Docker) Error!Health {
     const argv = [_][]const u8{
         host.progs.docker, "exec", d.container, "curl",
-        "-fsS",            "-o",   "/dev/null",  "http://localhost:4000/health",
+        "-fsS",            "-o",   "/dev/null", "http://localhost:4000/health",
     };
     const cap = try host.capture(&argv);
     defer host.freeCapture(cap);
