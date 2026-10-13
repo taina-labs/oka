@@ -4,9 +4,9 @@
 # (127.0.0.1:4000, for `tailscale serve` and checks from the box itself).
 
 # Docker's default json-file logger never rotates. On a box with a small disk
-# (an SD card is the common case) unbounded container logs fill the filesystem,
-# and PostgreSQL going read-only takes the whole community down with them. Cap
-# every service at 10 MB across 3 files.
+# (an SD card is the common case) unbounded container logs fill the filesystem
+# and take the community down with them. Cap every service at 10 MB across 3
+# files.
 x-logging: &logging
   driver: json-file
   options:
@@ -14,43 +14,15 @@ x-logging: &logging
     max-file: "3"
 
 services:
-  db:
-    image: postgres:18-alpine
-    restart: unless-stopped
-    logging: *logging
-    # Homelab sizing (Raspberry Pi class box): a small shared buffer and a
-    # tight connection ceiling keep PostgreSQL well-behaved next to the app.
-    command: ["postgres", "-c", "shared_buffers=256MB", "-c", "max_connections=20"]
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-taina}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
-      POSTGRES_DB: ${POSTGRES_DB:-taina}
-      PGDATA: /var/lib/postgresql/data/pgdata
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      # First-boot scripts: they run once, when the data volume is still
-      # empty, and create the non-superuser role the app connects as.
-      - ./deploy/initdb:/docker-entrypoint-initdb.d:ro
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-taina}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   app:
     image: ${TAINA_IMAGE:-ghcr.io/taina-labs/taina:latest}
     # `missing`, not `always`: a locally built image (see build-image.sh) must be
     # usable, and an offline box must still be able to `up -d` after a restart.
     pull_policy: missing
-    depends_on:
-      db:
-        condition: service_healthy
     environment:
-      # Non-superuser role: the database enforces the RLS policies (per-
-      # community isolation) on everything the app touches.
-      DATABASE_URL: ecto://taina_app:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db/${POSTGRES_DB:-taina}
-      # Superuser connection, only for Nhaman backups (pg_dump/pg_restore).
-      BACKUP_DATABASE_URL: postgresql://${POSTGRES_USER:-taina}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db/${POSTGRES_DB:-taina}
+      # The database is a SQLite file the app owns, under /app/data. There is
+      # no database service: the release creates and migrates the file on boot.
+      DATABASE_PATH: /app/data/taina.db
       PHX_HOST: ${PHX_HOST:-localhost}
       PHX_SERVER: "true"
       SECRET_KEY_BASE: ${SECRET_KEY_BASE:?set SECRET_KEY_BASE in .env}
@@ -58,8 +30,8 @@ services:
       # Storage (Ybira uploads) - must match STORAGE_ROOT read in
       # config/runtime.exs, or uploads fall back to the default path.
       STORAGE_ROOT: /app/storage
-      # Backup (Nhaman) - off by default; "true" enables the scheduled
-      # pg_dump + storage archive written under BACKUP_DIR.
+      # Backup (Nhaman) - off by default; "true" enables the scheduled SQLite
+      # snapshot plus storage archive written under BACKUP_DIR.
       BACKUP_ENABLED: ${BACKUP_ENABLED:-false}
       BACKUP_DIR: /app/backups
       # Update check - "true" lets the UI advertise newer Taina releases.
@@ -73,10 +45,12 @@ services:
     ports:
       - "127.0.0.1:4000:4000"
     volumes:
-      # Data roots. Defaults are named Docker volumes; set TAINA_STORAGE_DIR /
-      # TAINA_BACKUP_DIR in .env to host paths (e.g. a mounted disk) without
-      # editing this file. Bind-mount paths must be owned by 65534:65534,
-      # the user the app runs as. See the tekoa installation guide.
+      # Data roots. Defaults are named Docker volumes; set TAINA_DB_DIR /
+      # TAINA_STORAGE_DIR / TAINA_BACKUP_DIR in .env to host paths (e.g. a
+      # mounted disk) without editing this file. Bind-mount paths must be owned
+      # by 65534:65534, the user the app runs as. See the tekoa installation
+      # guide.
+      - ${TAINA_DB_DIR:-db_data}:/app/data
       - ${TAINA_STORAGE_DIR:-storage_data}:/app/storage
       - ${TAINA_BACKUP_DIR:-backups_data}:/app/backups
     restart: unless-stopped
@@ -117,7 +91,7 @@ services:
       - caddy_config:/config
 
 volumes:
-  postgres_data:
+  db_data:
     driver: local
   storage_data:
     driver: local

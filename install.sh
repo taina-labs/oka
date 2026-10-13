@@ -47,9 +47,6 @@ if [ -f "$ENV_FILE" ]; then
 else
   step "Criando o $ENV_FILE com segredos novos"
   SECRET_KEY_BASE="$(openssl rand -base64 48 | tr -d '\n')"
-  # Senha do banco só com letras e números (sem caracteres que o shell ou a URL
-  # precisariam escapar).
-  POSTGRES_PASSWORD="$(openssl rand -hex 24)"
   TAINA_DOMAIN_VALUE="${TAINA_DOMAIN:-}"
   if [ -n "$TAINA_DOMAIN_VALUE" ]; then
     PHX_HOST_VALUE="$TAINA_DOMAIN_VALUE"
@@ -59,8 +56,8 @@ else
 
   umask 077
   cat > "$ENV_FILE" <<EOF
-# Gerado pelo install.sh. Trate este arquivo como segredo: ele tem a senha do
-# banco e a chave que assina as sessões. Não versione (não faça commit).
+# Gerado pelo install.sh. Trate este arquivo como segredo: ele tem a chave que
+# assina as sessões. Não versione (não faça commit).
 
 # Imagem do container. Por padrão usa a imagem publicada do Tainá.
 TAINA_IMAGE=ghcr.io/taina-labs/taina:latest
@@ -73,11 +70,8 @@ TAINA_DOMAIN=$TAINA_DOMAIN_VALUE
 # Hostname que o app usa para montar as URLs.
 PHX_HOST=$PHX_HOST_VALUE
 
-# Segredos (gerados uma vez, não altere na mão).
+# Segredo da sessão (gerado uma vez, não altere na mão).
 SECRET_KEY_BASE=$SECRET_KEY_BASE
-POSTGRES_USER=taina
-POSTGRES_PASSWORD=$POSTGRES_PASSWORD
-POSTGRES_DB=taina
 
 # Backups agendados. Mude para true depois de montar um disco de backup.
 BACKUP_ENABLED=false
@@ -87,9 +81,11 @@ BACKUP_ENABLED=false
 TAINA_UPDATE_CHECK=false
 
 # Diretórios de dados no host. Por padrão são volumes nomeados do Docker
-# (storage_data e backups_data). Preencha com um caminho da caixa (ex.:
-# /mnt/disco/taina) para guardar uploads ou backups num disco próprio, e dê
-# o diretório ao usuário 65534:65534, que é como o app roda no container.
+# (db_data, storage_data e backups_data). Preencha com um caminho da caixa
+# (ex.: /mnt/disco/taina) para guardar o banco, os uploads ou os backups num
+# disco próprio, e dê o diretório ao usuário 65534:65534, que é como o app
+# roda no container.
+#TAINA_DB_DIR=
 #TAINA_STORAGE_DIR=
 #TAINA_BACKUP_DIR=
 EOF
@@ -145,7 +141,7 @@ else
   fi
 fi
 
-step "Subindo o Tainá (banco, app e proxy reverso)"
+step "Subindo o Tainá (app e proxy reverso)"
 $COMPOSE up -d
 
 # ---------------------------------------------------------------------------
@@ -153,7 +149,7 @@ $COMPOSE up -d
 #
 # A sondagem roda de dentro do container do app, em http://localhost:4000/health.
 # Ela é a fonte da verdade: o endpoint só responde 200 quando o app subiu E o
-# PostgreSQL respondeu, que é a condição que install.sh precisa confirmar. Não
+# banco respondeu, que é a condição que install.sh precisa confirmar. Não
 # depende de curl no host, nem de certificado, nem de o Caddy já ter emitido o
 # certificado dele (com TAINA_DOMAIN, o Caddy serve só aquele domínio, então
 # sondar https://localhost nunca bateria; e a porta 4000 do app, publicada só
@@ -251,5 +247,4 @@ fi
 say ""
 say "Comandos úteis:"
 say "    docker compose logs -f app     # acompanhar os logs do app"
-say "    docker compose logs -f db      # acompanhar os logs do banco"
 say "    ./update.sh                    # atualizar para a versão mais recente"

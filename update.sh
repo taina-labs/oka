@@ -40,11 +40,6 @@ else
   IMAGE_REF="$(grep '^TAINA_IMAGE=' "$ENV_FILE" 2>/dev/null | cut -d= -f2-)"
   IMAGE_REF="${IMAGE_REF:-ghcr.io/taina-labs/taina:latest}"
 fi
-DB_USER="$(grep '^POSTGRES_USER=' "$ENV_FILE" | cut -d= -f2-)"
-DB_USER="${DB_USER:-taina}"
-DB_NAME="$(grep '^POSTGRES_DB=' "$ENV_FILE" | cut -d= -f2-)"
-DB_NAME="${DB_NAME:-taina}"
-
 # O Caddy carrega a configuração apontada em TAINA_CADDYFILE (mesma regra do
 # install.sh): com domínio público, o Caddyfile; sem domínio, o Caddyfile.local.
 DOMAIN_VALUE="$(grep '^TAINA_DOMAIN=' "$ENV_FILE" | cut -d= -f2-)"
@@ -77,18 +72,21 @@ else
   $COMPOSE pull
 fi
 
-# Backup do banco antes de mexer em qualquer coisa: se a migração da versão
-# nova estragar algo, é ele que permite voltar sem perder os dados. Sem
-# container do app não há nada a proteger (primeira instalação), então pulamos.
+# Cópia do banco antes de mexer em qualquer coisa: se a migração da versão nova
+# estragar algo, é ela que permite voltar sem perder os dados. O banco é um
+# arquivo SQLite e o app o mantém aberto, então um desligamento limpo (que faz o
+# checkpoint do WAL) vem antes da cópia. Sem container do app não há nada a
+# proteger (primeira instalação), então pulamos.
 if [ -n "$OLD_IMAGE" ]; then
-  step "Guardando o estado atual (backup do banco em $ROLLBACK_DIR/)"
+  step "Guardando o estado atual (cópia do banco em $ROLLBACK_DIR/)"
   mkdir -p "$ROLLBACK_DIR"
-  DUMP_FILE="$ROLLBACK_DIR/taina-db-$STAMP.dump"
-  if ! $COMPOSE exec -T db pg_dump --username "$DB_USER" --format=custom "$DB_NAME" > "$DUMP_FILE"; then
+  DUMP_FILE="$ROLLBACK_DIR/taina-db-$STAMP.db"
+  $COMPOSE stop app >/dev/null 2>&1 || true
+  if ! $COMPOSE cp app:/app/data/taina.db "$DUMP_FILE"; then
     rm -f "$DUMP_FILE"
-    die "o backup pré-atualização falhou; não vou atualizar por cima de um banco sem cópia. Veja os logs do banco."
+    die "a cópia do banco antes da atualização falhou; não vou atualizar por cima de um banco sem cópia. Veja os logs do app."
   fi
-  say "Backup do banco salvo em $DUMP_FILE."
+  say "Banco salvo em $DUMP_FILE."
 fi
 
 step "Reiniciando com a versão nova (migrações rodam no boot)"
@@ -120,16 +118,14 @@ if [ "$HEALTHY" -ne 1 ]; then
     say "    docker tag $OLD_IMAGE $IMAGE_REF"
     say "    $COMPOSE up -d"
     say ""
-    # O restore basta por si: o dump em formato custom grava o dono real de
-    # cada objeto (as migrações rodam como taina_app) e o pg_restore roda aqui
-    # como o superusuário do bootstrap, então recria tudo com os donos que o
-    # dump registrou. Não há REASSIGN OWNED BY nesta receita, e é de propósito:
-    # o POSTGRES_USER do bootstrap é um papel fixo do Postgres, e um REASSIGN
-    # partindo dele sempre erra.
-    say "O backup do banco feito antes de atualizar está em $DUMP_FILE. Se as"
-    say "migrações da versão nova estragarem os dados, restaure-o com:"
+    # O banco é um arquivo SQLite e o app o mantém aberto: a restauração para o
+    # app, troca o arquivo pelo do backup, e o `up -d` sobe de novo.
+    say "A cópia do banco feita antes de atualizar está em $DUMP_FILE. Se as"
+    say "migrações da versão nova estragarem os dados, restaure-a com:"
     say ""
-    say "    $COMPOSE exec -T db pg_restore --clean --if-exists --username $DB_USER --dbname $DB_NAME < $DUMP_FILE"
+    say "    $COMPOSE stop app"
+    say "    $COMPOSE cp $DUMP_FILE app:/app/data/taina.db"
+    say "    $COMPOSE up -d"
     say ""
   fi
   if [ -f "$OVERRIDE_FILE" ]; then

@@ -5,9 +5,9 @@
 > (Raspberry Pi, mini PC ou VPS).
 
 O Oka não contém o código do Tainá. Ele baixa a imagem publicada e sobe tudo
-com um comando: banco de dados, aplicação e um proxy reverso com HTTPS
-automático. É o "deploy é produto": uma comunidade não-técnica instala em menos
-de 30 minutos e nunca tem medo de atualizar.
+com um comando: a aplicação e um proxy reverso com HTTPS automático. É o "deploy
+é produto": uma comunidade não-técnica instala em menos de 30 minutos e nunca
+tem medo de atualizar.
 
 ## Instalação
 
@@ -51,18 +51,18 @@ escreve um `docker-compose.override.yml` que o Compose lê sozinho. A partir
 aí, o `install.sh` e o `update.sh` passam a usar a imagem local. Para voltar ao
 comportamento normal, apague esse arquivo.
 
-### Se a caixa já rodou uma versão anterior do compose
+### Se a caixa já rodou o compose antigo (com PostgreSQL)
 
-O script que cria o papel do aplicativo no banco
-(`deploy/initdb/01-taina-app-role.sh`) roda uma única vez, num volume
-`postgres_data` vazio. Numa caixa que já subiu o compose antigo, o volume já
-está populado, o papel `taina_app` não chega a ser criado e o app não conecta
-no banco. Duas saídas:
+O Tainá passou a guardar tudo num arquivo SQLite que o app mesmo cuida
+(`/app/data/taina.db`); não há mais serviço de banco de dados. Uma caixa que
+rodou o compose anterior tem os dados num volume `postgres_data`, que a versão
+nova não lê. Antes do primeiro lançamento estável não há dados reais a perder,
+então comece do zero:
 
-- Recomeçar do zero: `docker compose down -v` e depois `./install.sh` de novo.
-  Antes do primeiro lançamento estável não há dados reais a perder.
-- Manter o volume: crie o papel `taina_app` à mão, seguindo as queries do
-  próprio `deploy/initdb/01-taina-app-role.sh`.
+```sh
+docker compose down -v
+./install.sh
+```
 
 ## Atualização
 
@@ -81,16 +81,15 @@ localmente com o `build-image.sh`, o `update.sh` reconstrói em vez de baixar.
 
 | Serviço | Papel |
 | --- | --- |
-| `db` | PostgreSQL 18 (dados da comunidade) |
-| `app` | a aplicação Tainá (imagem `ghcr.io/taina-labs/taina`) |
+| `app` | a aplicação Tainá (imagem `ghcr.io/taina-labs/taina`), com o banco SQLite |
 | `caddy` | proxy reverso, única porta de entrada, HTTPS automático |
 
 Apenas o Caddy fica exposto à rede. A aplicação também responde em
 `127.0.0.1:4000`, mas só dentro da própria caixa: é esse endereço que o
 `tailscale serve` usa para publicar o Tainá sem abrir portas. Os dados ficam
-em volumes nomeados (`postgres_data`, `storage_data`, `backups_data`) ou nos
-diretórios do host apontados em `TAINA_STORAGE_DIR` e `TAINA_BACKUP_DIR` no
-`.env`, e persistem entre reinícios e atualizações.
+em volumes nomeados (`db_data`, `storage_data`, `backups_data`) ou nos
+diretórios do host apontados em `TAINA_DB_DIR`, `TAINA_STORAGE_DIR` e
+`TAINA_BACKUP_DIR` no `.env`, e persistem entre reinícios e atualizações.
 
 Quem sobe os serviços na mão (`docker compose up -d`, sem os scripts) fica com
 o `Caddyfile.local` por padrão; numa caixa com domínio público, exporte
