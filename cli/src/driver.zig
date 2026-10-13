@@ -127,6 +127,22 @@ pub const Driver = union(Kind) {
 
 // --- docker ------------------------------------------------------------------
 
+/// A fresh named volume, and a host dir the operator pointed at, can be
+/// root-owned; make the app's data roots writable by the runtime user
+/// (nobody, 65534) before the run. Best effort: a failure here is not fatal.
+fn ensureDataPerms(host: *proc.Host, cfg: *const config.Config) Error!void {
+    var argv: std.ArrayList([]const u8) = .empty;
+    const g = host.gpa;
+    defer argv.deinit(g);
+    try argv.appendSlice(g, &.{ host.progs.docker, "run", "--rm", "--user", "root", "--entrypoint", "/bin/sh" });
+    try argv.appendSlice(g, &.{ "-v", try volumeArg(host, cfg.db_dir, "taina_db", "/app/data") });
+    try argv.appendSlice(g, &.{ "-v", try volumeArg(host, cfg.storage_dir, "taina_storage", "/app/storage") });
+    try argv.appendSlice(g, &.{ "-v", try volumeArg(host, cfg.backup_dir, "taina_backups", "/app/backups") });
+    try argv.append(g, cfg.image);
+    try argv.appendSlice(g, &.{ "-c", "chown 65534:65534 /app/data /app/storage /app/backups" });
+    _ = host.run(argv.items) catch {};
+}
+
 fn dockerSetup(host: *proc.Host, cfg: *const config.Config) Error!u8 {
     var mutable = cfg.*;
     if (mutable.secret.len == 0) mutable.secret = try generateSecret(host);
@@ -135,6 +151,7 @@ fn dockerSetup(host: *proc.Host, cfg: *const config.Config) Error!u8 {
     host.step("criando a rede {s}", .{mutable.network});
     _ = host.run(&.{ host.progs.docker, "network", "create", mutable.network }) catch {};
 
+    try ensureDataPerms(host, &mutable);
     host.step("subindo o Taina", .{});
     const dir = try host.makeTempDir();
     defer host.removeTempDir(dir);
@@ -217,6 +234,7 @@ fn dockerUpdate(host: *proc.Host, cfg: *const config.Config, tag: ?[]const u8) E
         _ = host.run(&.{ host.progs.docker, "rm", mutable.container }) catch {};
     }
 
+    try ensureDataPerms(host, &mutable);
     host.step("subindo a versao nova", .{});
     const dir = try host.makeTempDir();
     defer host.removeTempDir(dir);
