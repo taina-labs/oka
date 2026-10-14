@@ -147,11 +147,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1791915724,
-        "narHash": "sha256-8iZlAwI9+AA4oFMCAXtFtzhFyhRQs7R2P+UJO/ydmxc=",
+        "lastModified": 1791976368,
+        "narHash": "sha256-Yq6xPdGUFF5l4lfeAxDsVRhPaZQUZjSy/bZ5pw2htXI=",
         "owner": "taina-labs",
         "repo": "taina",
-        "rev": "5b111d0cb366f0ea907c5ce45162353b754b8aa2",
+        "rev": "75d9765525a7248ca6298420db87c6a6d5a45b93",
         "type": "github"
       },
       "original": {
