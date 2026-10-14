@@ -156,6 +156,7 @@
       },
       "original": {
         "owner": "taina-labs",
+        "ref": "v0.2.0",
         "repo": "taina",
         "type": "github"
       }

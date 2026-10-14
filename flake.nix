@@ -4,8 +4,10 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
     # The release the module runs and the CLI operates. taina owns its build.
+    # Pinned to a release tag, not main: the module and CLI target a shipped
+    # taina. `.github/workflows/update-taina.yml` bumps this tag and re-locks.
     taina = {
-      url = "github:taina-labs/taina";
+      url = "github:taina-labs/taina/v0.2.0";
       inputs.nixpkgs.follows = "nixpkgs";
     };
     # Pinned Zig toolchain: nixpkgs' zig moves with the channel and lags the

@@ -1,0 +1,62 @@
+name: update-taina
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The flake input is pinned to a release tag, so `nix flake update` alone
+      # would be a no-op: the tag in flake.nix is what moves here.
+      - name: Resolve the latest taina release and the pinned tag
+        id: taina
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          latest="$(gh api repos/taina-labs/taina/releases/latest --jq .tag_name)"
+          current="$(sed -n 's|.*github:taina-labs/taina/\(.*\)".*|\1|p' flake.nix)"
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "latest=$latest current=$current"
+
+      - name: Stop when the pinned tag is already the latest release
+        if: steps.taina.outputs.latest == steps.taina.outputs.current
+        run: echo "flake.nix already pins taina ${{ steps.taina.outputs.latest }}"
+
+      - uses: cachix/install-nix-action@v31
+        if: steps.taina.outputs.latest != steps.taina.outputs.current
+
+      - name: Bump the pinned tag and re-lock
+        if: steps.taina.outputs.latest != steps.taina.outputs.current
+        env:
+          LATEST: ${{ steps.taina.outputs.latest }}
+        run: |
+          sed -i -E "s|github:taina-labs/taina[^\"]*\"|github:taina-labs/taina/${LATEST}\"|" flake.nix
+          nix flake update taina
+
+      - name: Open the pull request
+        if: steps.taina.outputs.latest != steps.taina.outputs.current
+        uses: peter-evans/create-pull-request@v8
+        with:
+          # A PAT so the PR runs CI: GITHUB_TOKEN-created PRs do not trigger it.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          branch: update-taina
+          delete-branch: true
+          commit-message: "chore(nix): update taina to ${{ steps.taina.outputs.latest }}"
+          title: "chore(nix): update taina to ${{ steps.taina.outputs.latest }}"
+          body: |
+            Bumps the taina flake input and re-locks.
+
+            taina ${{ steps.taina.outputs.current }} -> ${{ steps.taina.outputs.latest }}
+
+            Opened by the update-taina workflow. Merging it is a nix flake change,
+            so release-please will cut the next oka release from it.
