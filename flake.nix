@@ -7,7 +7,7 @@
     # Pinned to a release tag, not main: the module and CLI target a shipped
     # taina. `.github/workflows/update-taina.yml` bumps this tag and re-locks.
     taina = {
-      url = "github:taina-labs/taina/v0.2.0";
+      url = "github:taina-labs/taina/v0.4.0";
       inputs.nixpkgs.follows = "nixpkgs";
     };
     # Pinned Zig toolchain: nixpkgs' zig moves with the channel and lags the
