@@ -77,6 +77,29 @@ taina update
 Baixa a imagem nova, guarda uma cópia do banco em `rollback/`, recria o
 container e confere a saúde. As migrações rodam sozinhas no boot.
 
+### Depois de atualizar: regenerar as miniaturas (uma vez por atualização)
+
+A atualização pode trazer um jeito novo de gerar miniatura (ou o conserto de
+uma falha). As imagens que já estavam na caixa não são reprocessadas sozinhas:
+quem tinha miniatura segue com a antiga, e a que falhou antes fica "pendente"
+para sempre. É um passo de pós-deploy, e não roda de novo a cada boot:
+
+```sh
+mix taina.thumbnails.regenerate
+```
+
+A tarefa é do Mix, então roda de um código-fonte do Tainá apontando para o
+banco da caixa (o mesmo arranjo do
+[runbook de senha](https://github.com/taina-labs/tekoa/blob/main/guias/runbook-senha.md)):
+
+```sh
+mix deps.get
+DATABASE_PATH=/caminho/da/taina.db mix taina.thumbnails.regenerate
+```
+
+Ela é idempotente: quem já tem miniatura regenera por cima, e o resumo sai no
+fim. A caixa pode estar no ar durante a tarefa.
+
 ## Backup e restauração
 
 ```sh
