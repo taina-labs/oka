@@ -55,16 +55,16 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1791765022,
-        "narHash": "sha256-ZGq3ptZzA+oO0N/Wi/F+GbuTijLkYExD01LvpNFAvr0=",
+        "lastModified": 1793493379,
+        "narHash": "sha256-sXMzgHQx2o1lsEVNOXj7sOSPGUwPPR4JMkBneso5pd4=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "7993f34ee47e28a3d607a525aadc6c94b73be728",
+        "rev": "39d1a6c4566dfdb75a27ae40a2ae3aad4df77408",
         "type": "github"
       },
       "original": {
         "owner": "NixOS",
-        "ref": "nixos-26.05",
+        "ref": "nixos-26.05-small",
         "repo": "nixpkgs",
         "type": "github"
       }
@@ -147,16 +147,16 @@
         ]
       },
       "locked": {
-        "lastModified": 1792729308,
-        "narHash": "sha256-65gCswNp5l432koVQe2sP/T7Qfi4VgFYCFeq552ykTM=",
+        "lastModified": 1793504804,
+        "narHash": "sha256-xkQbAndgMU5P+flM/TZaeuITM8TtWzqg6BQ/06QcqUY=",
         "owner": "taina-labs",
         "repo": "taina",
-        "rev": "eb660e95f6867fc9928a1f58655eacebc8353465",
+        "rev": "b964c4c1e08071f448811c712124ddd05f190c24",
         "type": "github"
       },
       "original": {
         "owner": "taina-labs",
-        "ref": "v0.5.1",
+        "ref": "v0.6.0",
         "repo": "taina",
         "type": "github"
       }
@@ -168,11 +168,11 @@
         "systems": "systems_2"
       },
       "locked": {
-        "lastModified": 1791894697,
-        "narHash": "sha256-VoA0Lc/lnsaPxyTN24C4kvmF5Ys8naySwqjyy/kN6jQ=",
+        "lastModified": 1793362835,
+        "narHash": "sha256-7oswnWgdOE51wX39ZeR9g1/IbNH81TNXakaolbrUIsc=",
         "owner": "mitchellh",
         "repo": "zig-overlay",
-        "rev": "ee6a6d65335b28d1462168b0e90f0ba12a263e44",
+        "rev": "335b6c4be4a86d00c329941f6a72968cea58e1f1",
         "type": "github"
       },
       "original": {
