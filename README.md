@@ -19,14 +19,66 @@ Resumido, numa caixa com [Docker](https://docs.docker.com/get-docker/):
 nix build github:taina-labs/oka
 sudo install -m755 result/bin/taina /usr/local/bin/taina
 
-# sobe o Tainá
+# instala e inicia o Tainá
 taina setup
 ```
 
-O `setup` gera o segredo em `taina.conf`, cria a rede, sobe o container do Tainá
-(a imagem `ghcr.io/taina-labs/taina`) e imprime o endereço do assistente de
-configuração. Sem domínio, use `taina setup --domain nuvem.suacomunidade.org`
-para o `PHX_HOST` das URLs.
+Na primeira execução interativa, `setup` pergunta as opções básicas, mostra um
+resumo e pede confirmação. Enter aceita cada valor padrão; cancelar não grava a
+configuração nem cria o container. Sem terminal interativo, usa os defaults, o
+ambiente e as flags sem esperar entrada. O segredo de sessão é gerado pela CLI e
+o arquivo `taina.conf` é criado com permissão `0600`.
+Quando esse arquivo já existe, não há assistente: `setup` valida e aplica a
+configuração atual.
+
+O endereço local impresso pela CLI usa HTTP em `127.0.0.1`. A CLI não configura
+TLS. Se definir um domínio, o endereço HTTPS público só funcionará depois que
+um proxy ou Tailscale Serve configurar TLS e encaminhar para a porta local.
+
+### Arquivo de configuração
+
+Por padrão, a CLI lê e grava `taina.conf` no diretório atual. Selecione outro
+arquivo com `--config` ou `TAINA_CONFIG`:
+
+```sh
+taina --config /srv/taina/taina.conf setup
+taina --config=/srv/taina/taina.conf setup
+TAINA_CONFIG=/srv/taina/taina.conf taina setup
+# Também aceito:
+taina setup --config /srv/taina/taina.conf
+```
+
+A precedência é `--config` > `TAINA_CONFIG` > `./taina.conf`. Para as opções,
+flags e ambiente sobrescrevem o arquivo durante a execução; esses overrides não
+alteram silenciosamente um arquivo existente. `--domain` tem precedência sobre
+`TAINA_DOMAIN`, que tem precedência sobre o valor do arquivo.
+
+Exemplo de `taina.conf`:
+
+```ini
+TAINA_IMAGE=ghcr.io/taina-labs/taina:latest
+TAINA_CONTAINER=taina-app
+TAINA_NETWORK=taina
+TAINA_DOMAIN=nuvem.suacomunidade.org
+TAINA_DB_DIR=
+TAINA_STORAGE_DIR=
+TAINA_BACKUP_DIR=
+SECRET_KEY_BASE=
+TAINA_HOST_PORT=4000
+TAINA_UPDATE_CHECK=false
+TAINA_BACKUP_ENABLED=false
+```
+
+Diretórios vazios usam volumes nomeados. `SECRET_KEY_BASE` pode ficar vazio: o
+`setup` gera o segredo e o acrescenta sem reformatar o restante do arquivo.
+Booleanos aceitos: `true`, `false`, `1` e `0`. Comentários e chaves têm de ser
+As chaves devem ser conhecidas e únicas; comentários são preservados. A CLI
+aponta o arquivo e a linha quando encontra um erro.
+
+Depois de editar o arquivo, rode `taina setup` para aplicar as mudanças. A CLI
+valida a configuração e recria somente o container quando necessário, mantendo
+volumes e diretórios de dados. `taina restart` apenas reinicia o container
+existente; `taina update` continua responsável por atualizar a imagem.
 
 ### Expor ao mundo
 
@@ -51,7 +103,7 @@ TAINA_IMAGE=taina:local taina setup
 ## Comandos
 
 ```
-taina setup [--domain D]     instala e sobe o Taina
+taina setup [--domain D]     instala, configura ou reconfigura o Taina
 taina up | down | restart    sobe, para (os dados ficam) e reinicia
 taina update [--tag T]       baixa e sobe a versao nova (guarda rollback)
 taina status                 estado do servico
@@ -65,8 +117,10 @@ taina version                versao da CLI
 ```
 
 Config no `taina.conf` (chave=valor), sobrescrita pelo ambiente: `TAINA_IMAGE`,
-`TAINA_DOMAIN`, `TAINA_DB_DIR`, `TAINA_STORAGE_DIR`, `TAINA_BACKUP_DIR` (vazios
-usam volumes nomeados), `SECRET_KEY_BASE`.
+`TAINA_CONTAINER`, `TAINA_NETWORK`, `TAINA_DOMAIN`, `TAINA_HOST_PORT`,
+`TAINA_DB_DIR`, `TAINA_STORAGE_DIR`, `TAINA_BACKUP_DIR`, `TAINA_UPDATE_CHECK`,
+`TAINA_BACKUP_ENABLED` e `SECRET_KEY_BASE`. Diretórios vazios usam volumes
+nomeados. `taina --help` lista também `TAINA_CONFIG` e as opções do backend.
 
 ## Atualização
 
@@ -140,8 +194,10 @@ no PATH:
 }
 ```
 
-No NixOS o update é `nixos-rebuild switch`; a CLI continua servindo para
-`status`, `logs`, `restart`, `backup`, `restore` e `doctor`.
+No NixOS, instalação, configuração e atualização pertencem ao módulo
+`services.taina` e são aplicadas com `sudo nixos-rebuild switch`. `taina setup`
+retorna uma orientação em vez de fingir que configurou o serviço. A CLI continua
+servindo para `status`, `logs`, `restart`, `backup`, `restore` e `doctor`.
 
 ## Guias do operador
 

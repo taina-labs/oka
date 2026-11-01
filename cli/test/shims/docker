@@ -1,28 +1,97 @@
 #!/bin/sh
-# Fake `docker` for the Zig driver tests. Logs its argv (one argument per
-# line, invocation terminated by an empty line) to $TAINA_FAKE_LOG, then
-# answers the probes the CLI makes.
+# Fake `docker` for the Zig driver tests. It records argv but never records the
+# contents of SECRET_KEY_BASE or the complete env-file.
 log="${TAINA_FAKE_LOG:?TAINA_FAKE_LOG must be set}"
+state="${TAINA_FAKE_STATE:?TAINA_FAKE_STATE must be set}"
 {
   prev=""
   for a in "$@"; do
     printf '%s\n' "$a"
-    # Surface the --env-file so tests can assert what crossed the boundary.
-    [ "$prev" = "--env-file" ] && sed 's/^/ENVFILE:/' "$a" 2>/dev/null
+    if [ "$prev" = "--env-file" ]; then
+      sed -n '/^BACKUP_ENABLED=/p; /^PHX_HOST=/p; /^TAINA_UPDATE_CHECK=/p' "$a" 2>/dev/null | sed 's/^/ENVFILE:/'
+    fi
     prev="$a"
   done
   printf '\n'
 } >>"$log"
 
 if [ "$1" = "inspect" ]; then
-  # TAINA_FAKE_NO_CONTAINER makes the container look absent (setup/update).
-  [ -n "${TAINA_FAKE_NO_CONTAINER:-}" ] && exit 1
+  if [ ! -f "$state.status" ]; then exit 1; fi
   case "$*" in
-    *State.Status*) printf '%s\n' "${TAINA_FAKE_STATUS:-running}" ;;
+    *State.Status*) cat "$state.status" ;;
+    *io.taina.managed*) [ -f "$state.managed" ] && cat "$state.managed" ;;
+    *io.taina.config*) [ -f "$state.label" ] && cat "$state.label" ;;
+    *Config.Env*) [ -f "$state.env" ] && cat "$state.env" ;;
+    *Config.Image*) printf '%s\n' "${TAINA_FAKE_IMAGE:-ghcr.io/taina-labs/taina:latest}" ;;
     *Id*) printf 'a1b2c3d4\n' ;;
   esac
   exit 0
 fi
 
-# run/start/stop/restart/rm/pull/logs/exec/cp/network: exit-code knob.
+if [ "$1" = "ps" ]; then
+  [ -f "$state.status" ] && [ -f "$state.name" ] && cat "$state.name"
+  exit 0
+fi
+
+if [ "$1" = "network" ] && [ "$2" = "create" ]; then
+  if [ -n "${TAINA_FAKE_NETWORK_ERROR:-}" ]; then
+    echo 'permission denied while creating network' >&2
+    exit 1
+  fi
+  if [ -f "$state.network" ] && [ "$(cat "$state.network")" = "$3" ]; then
+    echo "network with name $3 already exists" >&2
+    exit 1
+  fi
+  printf '%s\n' "$3" >"$state.network"
+  exit 0
+fi
+
+case "$1" in
+  run)
+    case " $* " in
+      *" --user root "*)
+        if [ "${TAINA_FAKE_PERMS_EXIT:-0}" != 0 ]; then exit "$TAINA_FAKE_PERMS_EXIT"; fi
+        ;;
+    esac
+    name=""
+    label=""
+    managed=""
+    env_file=""
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --name) name="$2"; shift 2 ;;
+        --label)
+          case "$2" in io.taina.config=*) label="$2" ;; esac
+          case "$2" in io.taina.managed=*) managed="$2" ;; esac
+          shift 2
+          ;;
+        --env-file) env_file="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    if [ -n "$name" ]; then
+      if [ -f "$state.status" ]; then
+        echo "container named $name already exists" >&2
+        exit 125
+      fi
+      printf 'running\n' >"$state.status"
+      printf '%s\n' "${label#io.taina.config=}" >"$state.label"
+      printf '%s\n' "${managed#io.taina.managed=}" >"$state.managed"
+      printf '%s\n' "$name" >"$state.name"
+      [ -n "$env_file" ] && cp "$env_file" "$state.env"
+      if [ "${TAINA_FAKE_RUN_EXIT:-0}" != 0 ]; then exit "$TAINA_FAKE_RUN_EXIT"; fi
+    fi
+    ;;
+  stop)
+    [ -f "$state.status" ] && printf 'exited\n' >"$state.status"
+    ;;
+  start|restart)
+    if [ "${TAINA_FAKE_START_EXIT:-0}" != 0 ]; then exit "$TAINA_FAKE_START_EXIT"; fi
+    [ -f "$state.status" ] && printf 'running\n' >"$state.status"
+    ;;
+  rm)
+    rm -f "$state.status" "$state.label" "$state.managed" "$state.name" "$state.env"
+    ;;
+esac
+
 exit "${TAINA_FAKE_EXIT:-0}"

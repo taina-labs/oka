@@ -21,6 +21,8 @@ pub const Ctx = struct {
     env: *std.process.Environ.Map,
     log_path: []const u8,
     tmp_path: []const u8,
+    state_path: []const u8,
+    output: *std.ArrayList(u8),
 
     const Shim = struct { name: []const u8, body: []const u8 };
 
@@ -37,6 +39,8 @@ pub const Ctx = struct {
 
         const env = try arena.create(std.process.Environ.Map);
         env.* = std.process.Environ.Map.init(arena);
+        const output = try arena.create(std.ArrayList(u8));
+        output.* = .empty;
         // Deterministic backend and config: never touch the real host.
         try env.put("TAINA_BACKEND", "docker");
         try env.put("TAINA_CONTAINER", "taina-app");
@@ -46,6 +50,7 @@ pub const Ctx = struct {
         const bin_dir = try std.fs.path.join(arena, &.{ tmp_path, "bin" });
         try Io.Dir.cwd().createDirPath(testing.io, bin_dir);
         const log_path = try std.fs.path.join(arena, &.{ tmp_path, "invocations.log" });
+        const state_path = try std.fs.path.join(arena, &.{ tmp_path, "docker-state" });
         const shim_files = [_]Shim{
             .{ .name = "docker", .body = docker_shim },
             .{ .name = "systemctl", .body = systemctl_shim },
@@ -59,6 +64,7 @@ pub const Ctx = struct {
             try Io.Dir.cwd().setFilePermissions(testing.io, p, .fromMode(0o755), .{});
         }
         try env.put("TAINA_FAKE_LOG", log_path);
+        try env.put("TAINA_FAKE_STATE", state_path);
 
         const host = try arena.create(proc.Host);
         host.* = .{
@@ -73,6 +79,7 @@ pub const Ctx = struct {
             },
             // Keep printed output off the build runner's protocol stream.
             .stdout_to_stderr = true,
+            .output_capture = output,
         };
         proc.Host.stdin_tty_override = false;
         return .{
@@ -82,6 +89,8 @@ pub const Ctx = struct {
             .env = env,
             .log_path = log_path,
             .tmp_path = tmp_path,
+            .state_path = state_path,
+            .output = output,
         };
     }
 
@@ -111,12 +120,32 @@ pub const Ctx = struct {
         return std.fs.path.join(self.arena_state.allocator(), &.{ self.tmp_path, rel });
     }
 
+    pub fn outputText(self: *const Ctx) []const u8 {
+        return self.output.items;
+    }
+
+    pub fn clearOutput(self: *Ctx) void {
+        self.output.clearRetainingCapacity();
+    }
+
+    pub fn seedContainer(self: *Ctx, status: []const u8) !void {
+        const arena = self.arena_state.allocator();
+        const status_path = try std.fmt.allocPrint(arena, "{s}.status", .{self.state_path});
+        try Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = status_path, .data = status });
+    }
+
+    pub fn setContainerStatus(self: *Ctx, status: []const u8) !void {
+        return self.seedContainer(status);
+    }
+
     /// All logged invocations, innermost-last. Each invocation is a slice of
     /// argv strings; invocations are separated by the shim's empty line.
     pub fn invocations(self: *Ctx) ![][]const []const u8 {
         const arena = self.arena_state.allocator();
-        const content = Io.Dir.cwd().readFileAlloc(testing.io, self.log_path, arena, .limited(1 << 20)) catch
-            return error.TestUnexpectedResult;
+        const content = Io.Dir.cwd().readFileAlloc(testing.io, self.log_path, arena, .limited(1 << 20)) catch |e| switch (e) {
+            error.FileNotFound => return &.{},
+            else => return error.TestUnexpectedResult,
+        };
         var list: std.ArrayList([]const []const u8) = .empty;
         var current: std.ArrayList([]const u8) = .empty;
         var lines = std.mem.splitScalar(u8, content, '\n');

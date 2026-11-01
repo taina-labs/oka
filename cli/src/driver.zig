@@ -48,7 +48,7 @@ pub const Driver = union(Kind) {
     pub fn setup(self: Driver, host: *proc.Host, cfg: *const config.Config) Error!u8 {
         return switch (self) {
             .docker => dockerSetup(host, cfg),
-            .systemd => noopLifecycle(host, "setup"),
+            .systemd => systemdSetup(host),
         };
     }
 
@@ -129,7 +129,7 @@ pub const Driver = union(Kind) {
 
 /// A fresh named volume, and a host dir the operator pointed at, can be
 /// root-owned; make the app's data roots writable by the runtime user
-/// (nobody, 65534) before the run. Best effort: a failure here is not fatal.
+/// (nobody, 65534) before the run.
 fn ensureDataPerms(host: *proc.Host, cfg: *const config.Config) Error!void {
     var argv: std.ArrayList([]const u8) = .empty;
     const g = host.gpa;
@@ -140,34 +140,140 @@ fn ensureDataPerms(host: *proc.Host, cfg: *const config.Config) Error!void {
     try argv.appendSlice(g, &.{ "-v", try volumeArg(host, cfg.backup_dir, "taina_backups", "/app/backups") });
     try argv.append(g, cfg.image);
     try argv.appendSlice(g, &.{ "-c", "chown 65534:65534 /app/data /app/storage /app/backups" });
-    _ = host.run(argv.items) catch {};
+    const code = host.run(argv.items) catch |e| {
+        host.err("nao consegui ajustar as permissoes dos dados. Confira o Docker e a imagem {s} antes de tentar novamente.", .{cfg.image});
+        return e;
+    };
+    if (code != 0) {
+        host.err("nao consegui ajustar as permissoes do banco, storage e backups. Verifique a imagem {s} e tente 'taina setup' novamente.", .{cfg.image});
+        return error.DriverFailed;
+    }
 }
 
 fn dockerSetup(host: *proc.Host, cfg: *const config.Config) Error!u8 {
     var mutable = cfg.*;
-    if (mutable.secret.len == 0) mutable.secret = try generateSecret(host);
-    try config.save(host, &mutable);
+    if (mutable.secret.len == 0) {
+        mutable.secret = try generateSecret(host);
+        if (mutable.file_exists) {
+            try config.persistSecret(host, &mutable);
+        } else {
+            try config.createInitial(host, &mutable);
+        }
+    } else if (!mutable.file_exists) {
+        try config.createInitial(host, &mutable);
+    }
 
-    host.step("criando a rede {s}", .{mutable.network});
-    _ = host.run(&.{ host.progs.docker, "network", "create", mutable.network }) catch {};
+    try ensureNetwork(host, mutable.network);
+    var current_container = mutable.container;
+    var exists = try containerExists(host, current_container);
+    if (!exists) {
+        if (try managedContainer(host)) |previous| {
+            current_container = previous;
+            exists = true;
+        }
+    }
+    if (exists) {
+        const matches = try containerMatches(host, &mutable, current_container);
+        const status = try containerStatus(host, current_container);
+        if (matches) {
+            if (std.mem.eql(u8, status, "running")) {
+                host.step("validando a saude do Taina ja configurado", .{});
+                try finishSetup(host, &mutable, "O Taina ja esta configurado e saudavel.");
+                return 0;
+            }
+            host.step("iniciando o container parado", .{});
+            const start_code = host.run(&.{ host.progs.docker, "start", current_container }) catch |e| {
+                host.err("nao consegui iniciar o container '{s}'. Os dados continuam preservados; tente 'taina setup' novamente.", .{current_container});
+                return e;
+            };
+            if (start_code != 0) {
+                host.err("o container '{s}' continua parado. Os dados estao preservados; confira 'taina logs' e tente 'taina setup' novamente.", .{current_container});
+                return start_code;
+            }
+            try finishSetup(host, &mutable, "O Taina foi iniciado e esta saudavel.");
+            return 0;
+        }
+
+        host.step("a configuracao mudou; recriando apenas o container", .{});
+        try ensureDataPerms(host, &mutable);
+        if (!std.mem.eql(u8, status, "exited") and !std.mem.eql(u8, status, "created") and !std.mem.eql(u8, status, "dead")) {
+            const stop_code = host.run(&.{ host.progs.docker, "stop", current_container }) catch |e| {
+                host.err("nao consegui parar o container '{s}'. Ele pode continuar rodando com a configuracao anterior; os dados foram mantidos.", .{current_container});
+                return e;
+            };
+            if (stop_code != 0) {
+                host.err("nao consegui parar o container '{s}'. Ele pode continuar rodando com a configuracao anterior; os dados foram mantidos.", .{current_container});
+                return stop_code;
+            }
+        }
+        const rm_code = host.run(&.{ host.progs.docker, "rm", current_container }) catch |e| {
+            host.err("nao consegui remover o container antigo '{s}'. Nenhum volume foi removido; tente 'taina setup' novamente.", .{current_container});
+            return e;
+        };
+        if (rm_code != 0) {
+            host.err("nao consegui remover o container antigo '{s}'. Nenhum volume foi removido; tente 'taina setup' novamente.", .{current_container});
+            return rm_code;
+        }
+        return createContainer(host, &mutable, "O Taina foi reconfigurado e esta saudavel.");
+    }
 
     try ensureDataPerms(host, &mutable);
-    host.step("subindo o Taina", .{});
-    const dir = try host.makeTempDir();
-    defer host.removeTempDir(dir);
-    const env_file = try writeContainerEnv(host, &mutable, dir);
-    const argv = try runArgs(host, &mutable, env_file);
-    const code = try host.run(argv);
-    if (code != 0) return code;
+    return createContainer(host, &mutable, "O Taina foi configurado e esta saudavel.");
+}
 
+fn createContainer(host: *proc.Host, cfg: *const config.Config, success_message: []const u8) Error!u8 {
+    host.step("subindo o Taina", .{});
+    const dir = host.makeTempDir() catch |e| {
+        reportContainerCreateFailure(host, cfg);
+        return e;
+    };
+    defer host.removeTempDir(dir);
+    const env_file = writeContainerEnv(host, cfg, dir) catch |e| {
+        reportContainerCreateFailure(host, cfg);
+        return e;
+    };
+    const fingerprint = configFingerprint(host, cfg) catch |e| {
+        reportContainerCreateFailure(host, cfg);
+        return e;
+    };
+    const argv = runArgs(host, cfg, env_file, fingerprint) catch |e| {
+        reportContainerCreateFailure(host, cfg);
+        return e;
+    };
+    const code = host.run(argv) catch |e| {
+        reportContainerCreateFailure(host, cfg);
+        return e;
+    };
+    if (code != 0) {
+        reportContainerCreateFailure(host, cfg);
+        return code;
+    }
+    try finishSetup(host, cfg, success_message);
+    return 0;
+}
+
+fn reportContainerCreateFailure(host: *proc.Host, cfg: *const config.Config) void {
+    host.err("nao consegui criar o container '{s}'. A caixa pode ficar sem container ativo; os volumes e diretorios de dados foram preservados. Corrija o erro e rode 'taina setup' novamente.", .{cfg.container});
+}
+
+fn finishSetup(host: *proc.Host, cfg: *const config.Config, success_message: []const u8) Error!void {
     host.step("esperando o Taina subir (no primeiro boot pode levar um minuto)", .{});
-    if (!try waitHealthy(host, &mutable)) {
-        host.err("o Taina nao ficou saudavel a tempo. Veja: docker logs -f {s}", .{mutable.container});
+    if (!try waitHealthy(host, cfg)) {
+        host.err("o Taina nao ficou saudavel a tempo. O container continua presente e os dados foram preservados. Veja 'taina logs' e tente 'taina setup' novamente.", .{});
         return error.DriverFailed;
     }
-    host.out("", .{});
-    host.out("O Taina esta no ar. Abra https://{s}/setup", .{if (mutable.domain.len > 0) mutable.domain else "localhost"});
-    return 0;
+    host.out("{s}", .{success_message});
+    printAccess(host, cfg);
+}
+
+fn printAccess(host: *proc.Host, cfg: *const config.Config) void {
+    host.out("Para configurar o Taina nesta caixa, abra: http://127.0.0.1:{d}/setup", .{cfg.host_port});
+    if (cfg.domain.len > 0) {
+        host.out("Endereco publico (seu proxy servir HTTPS na porta 443): https://{s}/setup.", .{cfg.domain});
+        host.out("Para outra porta publica, acrescente-a a URL. Esse acesso so funciona depois que um proxy ou Tailscale encaminhar para 127.0.0.1:{d}.", .{cfg.host_port});
+    } else {
+        host.out("Para acesso publico, configure um proxy ou Tailscale Serve com TLS apontando para 127.0.0.1:{d}.", .{cfg.host_port});
+    }
 }
 
 fn dockerSimple(host: *proc.Host, comptime msg: []const u8, argv: []const []const u8) Error!u8 {
@@ -239,7 +345,8 @@ fn dockerUpdate(host: *proc.Host, cfg: *const config.Config, tag: ?[]const u8) E
     const dir = try host.makeTempDir();
     defer host.removeTempDir(dir);
     const env_file = try writeContainerEnv(host, &mutable, dir);
-    const argv = try runArgs(host, &mutable, env_file);
+    const fingerprint = try configFingerprint(host, &mutable);
+    const argv = try runArgs(host, &mutable, env_file, fingerprint);
     const code = try host.run(argv);
     if (code != 0) return code;
 
@@ -299,11 +406,13 @@ fn dockerDescribe(host: *proc.Host, d: Docker, cfg: *const config.Config) Error!
 }
 
 /// The full `docker run` argv for the app container. Used by setup and update.
-fn runArgs(host: *proc.Host, cfg: *const config.Config, env_file: []const u8) Error![]const []const u8 {
+fn runArgs(host: *proc.Host, cfg: *const config.Config, env_file: []const u8, fingerprint: []const u8) Error![]const []const u8 {
     var argv: std.ArrayList([]const u8) = .empty;
     const g = host.gpa;
     try argv.appendSlice(g, &.{ host.progs.docker, "run", "-d", "--name", cfg.container });
     try argv.appendSlice(g, &.{ "--network", cfg.network, "--restart", "unless-stopped" });
+    try argv.appendSlice(g, &.{ "--label", "io.taina.managed=taina" });
+    try argv.appendSlice(g, &.{ "--label", try std.fmt.allocPrint(g, "io.taina.config={s}", .{fingerprint}) });
     try argv.appendSlice(g, &.{ "--log-driver", "json-file", "--log-opt", "max-size=10m", "--log-opt", "max-file=3" });
     try argv.appendSlice(g, &.{ "-p", try bindPort(host, cfg.host_port) });
     try argv.appendSlice(g, &.{ "--env-file", env_file });
@@ -328,9 +437,22 @@ fn bindPort(host: *proc.Host, port: u16) Error![]const u8 {
 fn writeContainerEnv(host: *proc.Host, cfg: *const config.Config, dir: []const u8) Error![]const u8 {
     const g = host.gpa;
     const path = std.fs.path.join(g, &.{ dir, "taina.env" }) catch return error.OutOfMemory;
-    var out: std.ArrayList(u8) = .empty;
+    const body = try containerEnvBody(host, cfg);
+    Io.Dir.cwd().writeFile(host.io, .{
+        .sub_path = path,
+        .data = body,
+        .flags = .{ .exclusive = true, .permissions = .fromMode(0o600) },
+    }) catch {
+        host.err("nao consegui criar o arquivo temporario de ambiente com permissao privada. Verifique as permissoes do diretorio temporario.", .{});
+        return error.DriverFailed;
+    };
+    return path;
+}
+
+fn containerEnvBody(host: *proc.Host, cfg: *const config.Config) Error![]const u8 {
+    const g = host.gpa;
     const phx_host = if (cfg.domain.len > 0) cfg.domain else "localhost";
-    const body = std.fmt.allocPrint(g,
+    return std.fmt.allocPrint(g,
         \\DATABASE_PATH=/app/data/taina.db
         \\PHX_HOST={s}
         \\PHX_SERVER=true
@@ -342,10 +464,6 @@ fn writeContainerEnv(host: *proc.Host, cfg: *const config.Config, dir: []const u
         \\SECRET_KEY_BASE={s}
         \\
     , .{ phx_host, if (cfg.backup_enabled) "true" else "false", if (cfg.update_check) "true" else "false", cfg.secret }) catch return error.OutOfMemory;
-    try out.appendSlice(g, body);
-    Io.Dir.cwd().writeFile(host.io, .{ .sub_path = path, .data = out.items }) catch return error.DriverFailed;
-    Io.Dir.cwd().setFilePermissions(host.io, path, .fromMode(0o600), .{}) catch {};
-    return path;
 }
 
 fn waitHealthy(host: *proc.Host, cfg: *const config.Config) Error!bool {
@@ -354,7 +472,10 @@ fn waitHealthy(host: *proc.Host, cfg: *const config.Config) Error!bool {
     while (i < 60) : (i += 1) {
         if (try dockerHealth(host, d) == .healthy) return true;
         host.printTo(.stdout, ".", .{});
-        host.io.sleep(Io.Duration.fromSeconds(5), .real) catch {};
+        host.io.sleep(Io.Duration.fromSeconds(5), .real) catch {
+            host.err("a espera pela verificacao de saude foi interrompida.", .{});
+            return error.DriverFailed;
+        };
     }
     return false;
 }
@@ -366,7 +487,167 @@ fn containerExists(host: *proc.Host, name: []const u8) Error!bool {
     return cap.ok();
 }
 
+fn managedContainer(host: *proc.Host) Error!?[]const u8 {
+    const argv = [_][]const u8{
+        host.progs.docker, "ps", "--all", "--filter", "label=io.taina.managed=taina", "--format", "{{.Names}}",
+    };
+    const cap = try host.capture(&argv);
+    defer host.freeCapture(cap);
+    if (!cap.ok()) {
+        host.err("nao consegui localizar o container anterior do Taina.", .{});
+        return error.DriverFailed;
+    }
+    const found = cap.line();
+    if (found.len == 0) return null;
+    if (std.mem.indexOfScalar(u8, found, '\n') != null) {
+        host.err("encontrei mais de um container gerenciado pelo Taina. Remova os excedentes antes de rodar 'taina setup'.", .{});
+        return error.DriverFailed;
+    }
+    return host.gpa.dupe(u8, found) catch error.OutOfMemory;
+}
+
+fn ensureNetwork(host: *proc.Host, network: []const u8) Error!void {
+    const argv = [_][]const u8{ host.progs.docker, "network", "create", network };
+    const cap = host.capture(&argv) catch |e| {
+        host.err("nao consegui verificar/criar a rede Docker '{s}'. Confira o Docker e tente 'taina setup' novamente.", .{network});
+        return e;
+    };
+    defer host.freeCapture(cap);
+    if (cap.ok() or std.mem.indexOf(u8, cap.stderr, "already exists") != null) return;
+    const detail = std.mem.trim(u8, cap.stderr, " \t\r\n");
+    if (detail.len > 0) {
+        host.err("nao consegui criar a rede Docker '{s}': {s}. Confira o Docker e tente novamente.", .{ network, detail });
+    } else {
+        host.err("nao consegui criar a rede Docker '{s}'. Confira o Docker e tente novamente.", .{network});
+    }
+    return error.DriverFailed;
+}
+
+fn containerStatus(host: *proc.Host, name: []const u8) Error![]const u8 {
+    const argv = [_][]const u8{ host.progs.docker, "inspect", "--format", "{{.State.Status}}", name };
+    const cap = try host.capture(&argv);
+    defer host.freeCapture(cap);
+    if (!cap.ok()) {
+        host.err("nao consegui consultar o estado do container '{s}'.", .{name});
+        return error.DriverFailed;
+    }
+    return host.gpa.dupe(u8, cap.line()) catch error.OutOfMemory;
+}
+
+fn containerMatches(host: *proc.Host, cfg: *const config.Config, name: []const u8) Error!bool {
+    const managed_format = "{{index .Config.Labels \"io.taina.managed\"}}";
+    const managed_argv = [_][]const u8{ host.progs.docker, "inspect", "--format", managed_format, name };
+    const managed = try host.capture(&managed_argv);
+    defer host.freeCapture(managed);
+    if (!managed.ok()) {
+        host.err("nao consegui verificar se o container '{s}' pertence ao Taina.", .{name});
+        return error.DriverFailed;
+    }
+    if (!std.mem.eql(u8, managed.line(), "taina") and !try looksLikeLegacyTaina(host, name)) {
+        host.err("o nome de container '{s}' ja esta em uso por outro servico. Nada foi alterado; escolha outro TAINA_CONTAINER ou verifique o container antes de remove-lo.", .{name});
+        return error.DriverFailed;
+    }
+
+    const fingerprint = try configFingerprint(host, cfg);
+    const label_format = "{{index .Config.Labels \"io.taina.config\"}}";
+    const label_argv = [_][]const u8{ host.progs.docker, "inspect", "--format", label_format, name };
+    const label = try host.capture(&label_argv);
+    defer host.freeCapture(label);
+    if (!label.ok()) {
+        host.err("nao consegui comparar a configuracao do container '{s}'.", .{cfg.container});
+        return error.DriverFailed;
+    }
+    if (!std.mem.eql(u8, label.line(), fingerprint)) return false;
+
+    const env_argv = [_][]const u8{ host.progs.docker, "inspect", "--format", "{{range .Config.Env}}{{println .}}{{end}}", name };
+    const actual_env = try host.capture(&env_argv);
+    defer host.freeCapture(actual_env);
+    if (!actual_env.ok()) {
+        host.err("nao consegui comparar o ambiente do container '{s}'.", .{cfg.container});
+        return error.DriverFailed;
+    }
+    return envContainsExpected(host, cfg, actual_env.stdout);
+}
+
+fn looksLikeLegacyTaina(host: *proc.Host, name: []const u8) Error!bool {
+    const env_argv = [_][]const u8{ host.progs.docker, "inspect", "--format", "{{range .Config.Env}}{{println .}}{{end}}", name };
+    const env = try host.capture(&env_argv);
+    defer host.freeCapture(env);
+    if (!env.ok()) return error.DriverFailed;
+    return hasEnvLine(env.stdout, "DATABASE_PATH=/app/data/taina.db") and
+        hasEnvLine(env.stdout, "PHX_SERVER=true") and
+        hasEnvLine(env.stdout, "STORAGE_ROOT=/app/storage") and
+        hasEnvPrefix(env.stdout, "SECRET_KEY_BASE=");
+}
+
+fn hasEnvLine(env: []const u8, expected: []const u8) bool {
+    var lines = std.mem.splitScalar(u8, env, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.eql(u8, std.mem.trimEnd(u8, line, "\r"), expected)) return true;
+    }
+    return false;
+}
+
+fn hasEnvPrefix(env: []const u8, prefix: []const u8) bool {
+    var lines = std.mem.splitScalar(u8, env, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.startsWith(u8, line, prefix) and line.len > prefix.len) return true;
+    }
+    return false;
+}
+
+fn envContainsExpected(host: *proc.Host, cfg: *const config.Config, actual: []const u8) Error!bool {
+    const expected = try containerEnvBody(host, cfg);
+    var expected_lines = std.mem.splitScalar(u8, expected, '\n');
+    while (expected_lines.next()) |wanted| {
+        if (wanted.len == 0) continue;
+        var actual_lines = std.mem.splitScalar(u8, actual, '\n');
+        var found = false;
+        while (actual_lines.next()) |line| {
+            if (std.mem.eql(u8, std.mem.trimEnd(u8, line, "\r"), wanted)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) return false;
+    }
+    return true;
+}
+
+/// This label excludes the secret. The secret is compared directly against
+/// the container environment captured by `docker inspect` and is never logged.
+fn configFingerprint(host: *proc.Host, cfg: *const config.Config) Error![]const u8 {
+    const fields = [_][]const u8{
+        cfg.container,
+        cfg.image,
+        cfg.network,
+        cfg.domain,
+        cfg.db_dir,
+        cfg.storage_dir,
+        cfg.backup_dir,
+        try num(host, cfg.host_port),
+        if (cfg.backup_enabled) "true" else "false",
+        if (cfg.update_check) "true" else "false",
+    };
+    var bytes: std.ArrayList(u8) = .empty;
+    defer bytes.deinit(host.gpa);
+    for (fields) |field| {
+        try bytes.appendSlice(host.gpa, field);
+        try bytes.append(host.gpa, 0);
+    }
+    var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(bytes.items, &digest, .{});
+    const hex = std.fmt.bytesToHex(digest, .lower);
+    return host.gpa.dupe(u8, &hex) catch error.OutOfMemory;
+}
+
 // --- systemd -----------------------------------------------------------------
+
+fn systemdSetup(host: *proc.Host) Error!u8 {
+    host.err("'taina setup' nao instala nem reconfigura o backend systemd. A instalacao pertence ao modulo NixOS.", .{});
+    host.printTo(.stderr, "  Configure services.taina e aplique com: sudo nixos-rebuild switch\n", .{});
+    return error.DriverFailed;
+}
 
 fn systemdSimple(host: *proc.Host, comptime msg: []const u8, argv: []const []const u8) Error!u8 {
     host.step(msg, .{});

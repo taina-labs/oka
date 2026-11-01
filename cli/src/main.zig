@@ -15,7 +15,7 @@ const usage_text =
     \\usage: taina [--backend docker|systemd] [--config PATH] <command> [args...]
     \\
     \\Caixa (ciclo de vida, so docker):
-    \\  setup [--domain D]        instala e sobe o Taina
+    \\  setup [--domain D] [--config PATH] instala, configura ou reconfigura
     \\  up | down | restart       sobe, para (os dados ficam) e reinicia
     \\  update [--tag T]          baixa e sobe a versao nova (guarda rollback)
     \\
@@ -31,9 +31,14 @@ const usage_text =
     \\  restore <arquivo.tar.gz>  restauracao (a CLI para o Taina e volta)
     \\  doctor                    diagnostico da caixa
     \\
+    \\Config: --config PATH (antes do comando), ou 'setup --config PATH'
+    \\  TAINA_CONFIG seleciona o arquivo; padrao: ./taina.conf
+    \\  Precedencia: --config > TAINA_CONFIG > taina.conf
+    \\  Exemplo: taina --config /etc/taina/taina.conf setup
     \\Environment: TAINA_BACKEND TAINA_CONFIG TAINA_IMAGE TAINA_CONTAINER
     \\  TAINA_NETWORK TAINA_DOMAIN TAINA_HOST_PORT TAINA_DB_DIR TAINA_STORAGE_DIR
-    \\  TAINA_BACKUP_DIR SECRET_KEY_BASE TAINA_RELEASE
+    \\  TAINA_BACKUP_DIR TAINA_UPDATE_CHECK TAINA_BACKUP_ENABLED
+    \\  SECRET_KEY_BASE TAINA_RELEASE
     \\
 ;
 
@@ -62,6 +67,7 @@ fn mapError(e: anyerror) u8 {
 
 pub fn run(host: *proc.Host, args: []const []const u8) Error!u8 {
     backend_flag = null;
+    config_path = config.default_path;
     if (host.get("TAINA_CONFIG")) |p| {
         if (p.len > 0) config_path = p;
     }
@@ -74,9 +80,11 @@ pub fn run(host: *proc.Host, args: []const []const u8) Error!u8 {
         } else if (std.mem.eql(u8, arg, "--config")) {
             i += 1;
             if (i >= args.len) return usage(host, "--config precisa de um caminho", .{});
+            if (args[i].len == 0) return usage(host, "--config precisa de um caminho", .{});
             config_path = args[i];
         } else if (std.mem.startsWith(u8, arg, "--config=")) {
             config_path = arg["--config=".len..];
+            if (config_path.len == 0) return usage(host, "--config precisa de um caminho", .{});
         } else if (std.mem.eql(u8, arg, "--backend")) {
             i += 1;
             if (i >= args.len) return usage(host, "--backend precisa de um valor: docker ou systemd", .{});
@@ -141,6 +149,7 @@ const Lifecycle = enum { up, down, restart, status };
 
 fn setup(host: *proc.Host, args: []const []const u8) Error!u8 {
     var domain: ?[]const u8 = null;
+    var path = config_path;
     var j: usize = 0;
     while (j < args.len) : (j += 1) {
         const a = args[j];
@@ -150,17 +159,110 @@ fn setup(host: *proc.Host, args: []const []const u8) Error!u8 {
             domain = args[j];
         } else if (std.mem.startsWith(u8, a, "--domain=")) {
             domain = a["--domain=".len..];
+        } else if (std.mem.eql(u8, a, "--config")) {
+            j += 1;
+            if (j >= args.len or args[j].len == 0) return usage(host, "--config precisa de um caminho", .{});
+            path = args[j];
+        } else if (std.mem.startsWith(u8, a, "--config=")) {
+            path = a["--config=".len..];
+            if (path.len == 0) return usage(host, "--config precisa de um caminho", .{});
         } else return usage(host, "'setup' nao entende '{s}'", .{a});
     }
-    var cfg = config.load(host, config_path);
+    if (systemdSetupSelected(host)) {
+        const systemd = driver.Driver{ .systemd = .{ .unit = "taina", .release = host.get("TAINA_RELEASE") orelse "" } };
+        return systemd.setup(host, &.{ .path = path });
+    }
+
+    var cfg = try config.load(host, path);
     if (domain) |d| cfg.domain = d;
+    try config.validate(host, &cfg);
     const d = try detectDriver(host, &cfg);
+    if (!cfg.file_exists and host.stdinIsTty()) {
+        if (!try interactiveSetup(host, &cfg, domain != null)) {
+            host.out("Configuracao cancelada. Nenhum container foi criado.", .{});
+            return 0;
+        }
+    }
     return d.setup(host, &cfg);
+}
+
+fn interactiveSetup(host: *proc.Host, cfg: *config.Config, domain_is_flagged: bool) Error!bool {
+    host.out("Instalacao inicial do Taina. Pressione Enter para aceitar os valores entre colchetes.", .{});
+    if (!domain_is_flagged) cfg.domain = try promptText(host, "Dominio publico (opcional; deixe vazio se nao tiver)", cfg.domain);
+    cfg.host_port = try promptPort(host, cfg.host_port);
+    cfg.db_dir = try promptText(host, "Diretorio do banco (vazio usa volume nomeado)", cfg.db_dir);
+    cfg.storage_dir = try promptText(host, "Diretorio do storage (vazio usa volume nomeado)", cfg.storage_dir);
+    cfg.backup_dir = try promptText(host, "Diretorio de backups (vazio usa volume nomeado)", cfg.backup_dir);
+    cfg.backup_enabled = try promptBool(host, "Habilitar backup agendado", cfg.backup_enabled);
+    cfg.update_check = try promptBool(host, "Habilitar verificacao de atualizacoes", cfg.update_check);
+
+    host.out("\nResumo da configuracao:", .{});
+    host.out("  Arquivo: {s}", .{cfg.path});
+    host.out("  Dominio: {s}", .{if (cfg.domain.len > 0) cfg.domain else "(nenhum)"});
+    host.out("  Porta local: 127.0.0.1:{d}", .{cfg.host_port});
+    host.out("  Banco: {s}", .{if (cfg.db_dir.len > 0) cfg.db_dir else "volume nomeado taina_db"});
+    host.out("  Storage: {s}", .{if (cfg.storage_dir.len > 0) cfg.storage_dir else "volume nomeado taina_storage"});
+    host.out("  Backups: {s}", .{if (cfg.backup_dir.len > 0) cfg.backup_dir else "volume nomeado taina_backups"});
+    host.out("  Backup agendado: {s}", .{if (cfg.backup_enabled) "sim" else "nao"});
+    host.out("  Verificacao de atualizacoes: {s}", .{if (cfg.update_check) "sim" else "nao"});
+    return confirm(host);
+}
+
+fn promptText(host: *proc.Host, label: []const u8, default: []const u8) Error![]const u8 {
+    host.printTo(.stdout, "{s} [{s}]: ", .{ label, if (default.len > 0) default else "vazio" });
+    const line = host.readLine() catch {
+        host.err("entrada encerrada. Nenhuma configuracao foi gravada.", .{});
+        return error.DriverFailed;
+    };
+    const value = std.mem.trim(u8, line, " \t\r");
+    if (value.len == 0) return host.gpa.dupe(u8, default) catch error.OutOfMemory;
+    return host.gpa.dupe(u8, value) catch error.OutOfMemory;
+}
+
+fn promptPort(host: *proc.Host, default: u16) Error!u16 {
+    const value_default = std.fmt.allocPrint(host.gpa, "{d}", .{default}) catch return error.OutOfMemory;
+    while (true) {
+        const text = try promptText(host, "Porta publicada em loopback", value_default);
+        const port = std.fmt.parseInt(u16, text, 10) catch {
+            host.err("informe uma porta entre 1 e 65535.", .{});
+            continue;
+        };
+        if (port == 0) {
+            host.err("a porta nao pode ser zero.", .{});
+            continue;
+        }
+        return port;
+    }
+}
+
+fn promptBool(host: *proc.Host, label: []const u8, default: bool) Error!bool {
+    const default_text = if (default) "sim" else "nao";
+    while (true) {
+        const value = try promptText(host, label, default_text);
+        if (value.len == 0 or std.mem.eql(u8, value, default_text)) return default;
+        if (std.mem.eql(u8, value, "sim") or std.mem.eql(u8, value, "s") or std.mem.eql(u8, value, "yes") or std.mem.eql(u8, value, "y") or std.mem.eql(u8, value, "true") or std.mem.eql(u8, value, "1")) return true;
+        if (std.mem.eql(u8, value, "nao") or std.mem.eql(u8, value, "não") or std.mem.eql(u8, value, "n") or std.mem.eql(u8, value, "no") or std.mem.eql(u8, value, "false") or std.mem.eql(u8, value, "0")) return false;
+        host.err("responda sim ou nao.", .{});
+    }
+}
+
+fn confirm(host: *proc.Host) Error!bool {
+    while (true) {
+        host.printTo(.stdout, "Confirmar e continuar? [s/N]: ", .{});
+        const line = host.readLine() catch {
+            host.err("entrada encerrada. Nenhuma configuracao foi gravada.", .{});
+            return error.DriverFailed;
+        };
+        const value = std.mem.trim(u8, line, " \t\r");
+        if (value.len == 0 or std.mem.eql(u8, value, "n") or std.mem.eql(u8, value, "nao") or std.mem.eql(u8, value, "não") or std.mem.eql(u8, value, "no")) return false;
+        if (std.mem.eql(u8, value, "s") or std.mem.eql(u8, value, "sim") or std.mem.eql(u8, value, "yes") or std.mem.eql(u8, value, "y")) return true;
+        host.err("responda sim ou nao.", .{});
+    }
 }
 
 fn lifecycle(host: *proc.Host, which: Lifecycle, args: []const []const u8) Error!u8 {
     if (args.len > 0) return usage(host, "'{s}' nao leva argumentos", .{@tagName(which)});
-    var cfg = config.load(host, config_path);
+    var cfg = try config.load(host, config_path);
     const d = try detectDriver(host, &cfg);
     return switch (which) {
         .up => d.up(host),
@@ -183,7 +285,7 @@ fn update(host: *proc.Host, args: []const []const u8) Error!u8 {
             tag = a["--tag=".len..];
         } else return usage(host, "'update' nao entende '{s}'", .{a});
     }
-    var cfg = config.load(host, config_path);
+    var cfg = try config.load(host, config_path);
     const d = try detectDriver(host, &cfg);
     return d.update(host, &cfg, tag);
 }
@@ -203,14 +305,14 @@ fn logs(host: *proc.Host, args: []const []const u8) Error!u8 {
             opts.tail = std.fmt.parseInt(u64, a["--tail=".len..], 10) catch return usage(host, "--tail precisa de um numero", .{});
         } else return usage(host, "'logs' nao entende '{s}'", .{a});
     }
-    var cfg = config.load(host, config_path);
+    var cfg = try config.load(host, config_path);
     const d = try detectDriver(host, &cfg);
     return d.logs(host, opts);
 }
 
 fn health(host: *proc.Host, args: []const []const u8) Error!u8 {
     if (args.len > 0) return usage(host, "'health' nao leva argumentos", .{});
-    var cfg = config.load(host, config_path);
+    var cfg = try config.load(host, config_path);
     const d = try detectDriver(host, &cfg);
     return switch (try d.health(host, &cfg)) {
         .healthy => blk: {
@@ -226,13 +328,13 @@ fn health(host: *proc.Host, args: []const []const u8) Error!u8 {
 
 fn backendCmd(host: *proc.Host, args: []const []const u8) Error!u8 {
     if (args.len > 0) return usage(host, "'backend' nao leva argumentos", .{});
-    var cfg = config.load(host, config_path);
+    var cfg = try config.load(host, config_path);
     const d = try detectDriver(host, &cfg);
     return d.describe(host, &cfg);
 }
 
 fn forward(host: *proc.Host, verb: []const u8, args: []const []const u8) Error!u8 {
-    var cfg = config.load(host, config_path);
+    var cfg = try config.load(host, config_path);
     const d = try detectDriver(host, &cfg);
     return d.runOnce(host, .{ .verb = verb, .argv = args });
 }
@@ -240,7 +342,7 @@ fn forward(host: *proc.Host, verb: []const u8, args: []const []const u8) Error!u
 /// restore replaces the database file, so the driver stops the app first.
 fn restoreCmd(host: *proc.Host, args: []const []const u8) Error!u8 {
     if (args.len == 0) return usage(host, "'restore' precisa do caminho do arquivo de backup", .{});
-    var cfg = config.load(host, config_path);
+    var cfg = try config.load(host, config_path);
     const d = try detectDriver(host, &cfg);
     return d.restore(host, args);
 }
@@ -273,6 +375,19 @@ fn detectDriver(host: *proc.Host, cfg: *const config.Config) Error!driver.Driver
     if (commandExists(host, host.progs.docker)) return explicit(host, cfg, .docker);
     host.err("nao achei docker nem systemd. Instale o Docker, ou rode no NixOS.", .{});
     return error.DriverFailed;
+}
+
+fn systemdSetupSelected(host: *proc.Host) bool {
+    if (backend_flag) |kind| return kind == .systemd;
+    if (host.get("TAINA_BACKEND")) |backend| {
+        if (backend.len > 0) return std.mem.eql(u8, backend, "systemd");
+    }
+    if (host.get("TAINA_RELEASE")) |release| {
+        if (release.len > 0) return true;
+    }
+    return builtin.os.tag != .windows and
+        commandExists(host, host.progs.systemctl) and
+        unitExists(host, "taina");
 }
 
 fn explicit(host: *proc.Host, cfg: *const config.Config, k: driver.Kind) Error!driver.Driver {

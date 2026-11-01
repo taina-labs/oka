@@ -42,6 +42,10 @@ pub const Host = struct {
     /// Under `zig build test` the test binary's stdout is the build runner's
     /// protocol stream, so tests set this to keep their printed output off it.
     stdout_to_stderr: bool = false,
+    /// Optional deterministic terminal seams used by the CLI tests.
+    stdin_input_override: ?[]const u8 = null,
+    stdin_input_offset: usize = 0,
+    output_capture: ?*std.ArrayList(u8) = null,
 
     pub fn get(self: *Host, key: []const u8) ?[]const u8 {
         return self.environ.get(key);
@@ -62,6 +66,38 @@ pub const Host = struct {
     pub fn stdinIsTty(self: *Host) bool {
         if (stdin_tty_override) |t| return t;
         return Io.File.stdin().isTty(self.io) catch false;
+    }
+
+    /// Read one line from the terminal. Tests may inject a newline-delimited
+    /// input buffer without opening a real tty.
+    pub fn readLine(self: *Host) Error![]const u8 {
+        if (self.stdin_input_override) |input| {
+            if (self.stdin_input_offset >= input.len) return error.DriverFailed;
+            const rest = input[self.stdin_input_offset..];
+            const end = std.mem.indexOfScalar(u8, rest, '\n') orelse rest.len;
+            self.stdin_input_offset += end;
+            if (end < rest.len) self.stdin_input_offset += 1;
+            return self.gpa.dupe(u8, std.mem.trimEnd(u8, rest[0..end], "\r")) catch error.OutOfMemory;
+        }
+
+        var line: std.ArrayList(u8) = .empty;
+        errdefer line.deinit(self.gpa);
+        while (true) {
+            var byte: [1]u8 = undefined;
+            const n = Io.File.stdin().readStreaming(self.io, &.{&byte}) catch |e| switch (e) {
+                error.EndOfStream => {
+                    if (line.items.len == 0) return error.DriverFailed;
+                    break;
+                },
+                else => {
+                    self.err("nao consegui ler a entrada do assistente.", .{});
+                    return error.DriverFailed;
+                },
+            };
+            if (n == 0 or byte[0] == '\n') break;
+            try line.append(self.gpa, byte[0]);
+        }
+        return self.gpa.dupe(u8, std.mem.trimEnd(u8, line.items, "\r")) catch error.OutOfMemory;
     }
 
     // --- output conventions -------------------------------------------------
@@ -91,6 +127,10 @@ pub const Host = struct {
     pub fn printTo(self: *Host, which: Stream, comptime fmt: []const u8, args: anytype) void {
         const text = std.fmt.allocPrint(self.gpa, fmt, args) catch return;
         defer self.gpa.free(text);
+        if (self.output_capture) |output| {
+            output.appendSlice(self.gpa, text) catch {};
+            return;
+        }
         const file: Io.File = switch (which) {
             .stdout => if (self.stdout_to_stderr) .stderr() else .stdout(),
             .stderr => .stderr(),
@@ -227,7 +267,9 @@ pub const Host = struct {
     }
 
     pub fn removeTempDir(self: *Host, path: []const u8) void {
-        Io.Dir.cwd().deleteTree(self.io, path) catch {};
+        Io.Dir.cwd().deleteTree(self.io, path) catch {
+            self.err("nao consegui remover o diretorio temporario '{s}'. Ele pode conter o arquivo privado de ambiente; remova-o manualmente.", .{path});
+        };
         self.gpa.free(path);
     }
 };
@@ -259,6 +301,8 @@ fn fixFor(prog: []const u8) ?[]const u8 {
 }
 
 pub const Error = error{
+    ConfigIO,
+    ConfigInvalid,
     DriverFailed,
     MissingEnv,
     NotATty,
