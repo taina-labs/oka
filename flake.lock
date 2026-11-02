@@ -55,11 +55,11 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1793493379,
-        "narHash": "sha256-sXMzgHQx2o1lsEVNOXj7sOSPGUwPPR4JMkBneso5pd4=",
+        "lastModified": 1793571983,
+        "narHash": "sha256-hwLE3wUw9gnplbv1I4EaB92BecfYK4P0sl84SmB5SPs=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "39d1a6c4566dfdb75a27ae40a2ae3aad4df77408",
+        "rev": "64aec40e18595d342f25f120069f2cb63c3947b4",
         "type": "github"
       },
       "original": {
@@ -147,16 +147,16 @@
         ]
       },
       "locked": {
-        "lastModified": 1793504804,
-        "narHash": "sha256-xkQbAndgMU5P+flM/TZaeuITM8TtWzqg6BQ/06QcqUY=",
+        "lastModified": 1793641500,
+        "narHash": "sha256-SMV5sITKCMN1ietg494h3vPu7lMSZNDolAwOryuX5Ho=",
         "owner": "taina-labs",
         "repo": "taina",
-        "rev": "b964c4c1e08071f448811c712124ddd05f190c24",
+        "rev": "3f7fc7afe1d5a989b7d6769dd2ebe5c52bfbaf0b",
         "type": "github"
       },
       "original": {
         "owner": "taina-labs",
-        "ref": "v0.6.0",
+        "ref": "v0.6.1",
         "repo": "taina",
         "type": "github"
       }
@@ -168,11 +168,11 @@
         "systems": "systems_2"
       },
       "locked": {
-        "lastModified": 1793362835,
-        "narHash": "sha256-7oswnWgdOE51wX39ZeR9g1/IbNH81TNXakaolbrUIsc=",
+        "lastModified": 1793621914,
+        "narHash": "sha256-htplbR8airaHg6ZsJoYJ9xjR3o/e+bc2SihMTnNwJCg=",
         "owner": "mitchellh",
         "repo": "zig-overlay",
-        "rev": "335b6c4be4a86d00c329941f6a72968cea58e1f1",
+        "rev": "788a86baa172eddaf6260150d0a65aa39421cd83",
         "type": "github"
       },
       "original": {
