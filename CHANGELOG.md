@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.2.0](https://github.com/taina-labs/oka/compare/v0.1.2...v0.2.0) (2026-11-01)
+
+
+### Features
+
+* **cli:** make setup interactive and idempotent ([07ad434](https://github.com/taina-labs/oka/commit/07ad434b95bd9c7328639e232b9b236fb859101d))
+* update taina ([a699def](https://github.com/taina-labs/oka/commit/a699def21f81e47f156f0bbed0c580b0a027ea90))
+* update taina ([eed27e7](https://github.com/taina-labs/oka/commit/eed27e724c5b30515013f8f1d837960ddc620429))
+
+
+### Documentation
+
+* **readme:** add the thumbnail regeneration post-deploy step ([5fc01e7](https://github.com/taina-labs/oka/commit/5fc01e7605da65622e3784ac6b04e7c0f8dabdb6))
+
 ## [0.1.2](https://github.com/taina-labs/oka/compare/v0.1.1...v0.1.2) (2026-10-14)
 
 
