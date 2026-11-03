@@ -12,9 +12,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Check shell syntax
-        run: sh -n build-image.sh deploy/compose/taina deploy/compose/smoke.sh
+        run: sh -n deploy/compose/taina deploy/compose/smoke.sh
       - name: ShellCheck
-        run: shellcheck build-image.sh deploy/compose/taina deploy/compose/smoke.sh
+        run: shellcheck deploy/compose/taina deploy/compose/smoke.sh
       - name: Compose static config
         run: |
           mkdir -p deploy/compose/backups
