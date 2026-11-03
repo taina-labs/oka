@@ -1,0 +1,166 @@
+#!/bin/sh
+# The one-off container scripts intentionally expand variables inside the
+# container, not in the host shell.
+# shellcheck disable=SC2016
+set -eu
+
+root=$(CDPATH='' cd -P "$(dirname "$0")" && pwd)
+compose_file=$root/compose.yaml
+config_file=$root/taina.conf
+example_file=$root/taina.conf.example
+backup_dir=$root/backups
+newline=$(printf '\nx')
+newline=${newline%x}
+
+die() { code=$1; shift; printf 'error: %s\n' "$*" >&2; exit "$code"; }
+note() { printf 'note: %s\n' "$*" >&2; }
+
+usage() {
+  cat <<'USAGE'
+usage: ./taina <command> [arguments]
+
+  init                              copy the config and create the backup directory
+  backup [--out /app/backups]       write an archive under ./backups
+  restore ARCHIVE_NAME              restore a file while the service is cold
+  <domain command>                  run a Taina release command
+
+Lifecycle uses Docker Compose directly:
+  docker compose up --detach --wait
+  docker compose stop taina
+USAGE
+}
+
+compose() { docker compose --project-directory "$root" --file "$compose_file" "$@"; }
+
+need_docker() {
+  command -v docker >/dev/null 2>&1 || die 3 "docker is required for this deployment"
+  docker compose version >/dev/null 2>&1 || die 3 "Docker Compose v2 is required"
+  docker info >/dev/null 2>&1 || die 3 "the Docker daemon is not running"
+}
+
+need_deployment() {
+  [ -f "$compose_file" ] || die 3 "missing Compose definition: $compose_file"
+  [ -f "$config_file" ] || die 3 "missing $config_file; run './taina init' and edit it first"
+  [ -d "$backup_dir" ] || die 3 "missing $backup_dir; run './taina init' first"
+}
+
+copy_if_missing() {
+  source=$1
+  destination=$2
+  if [ -e "$destination" ]; then
+    note "$destination exists; leaving it unchanged"
+  else
+    cp "$source" "$destination" || die 3 "could not write $destination"
+    printf 'wrote %s\n' "$destination"
+  fi
+}
+
+init() {
+  [ "$#" -eq 0 ] || die 2 "usage: ./taina init"
+  [ -f "$example_file" ] || die 3 "missing bundled config example: $example_file"
+  copy_if_missing "$example_file" "$config_file"
+  mkdir -p "$backup_dir" || die 3 "could not create backup directory"
+}
+
+run_compose() {
+  if [ -t 0 ] && [ -t 1 ]; then set -- -it "$@"; else set -- -i "$@"; fi
+  compose run --rm --no-deps "$@"
+}
+
+run_once() { run_compose --entrypoint /app/bin/cli taina "$@"; }
+
+run_domain() {
+  [ "$#" -gt 0 ] || die 2 "a release command is required"
+  need_deployment
+  need_docker
+  run_once "$@"
+}
+
+backup_stat() {
+  if output=$(stat -c '%a %g' "$backup_dir" 2>/dev/null); then printf '%s\n' "$output"; return; fi
+  stat -f '%Lp %g' "$backup_dir"
+}
+
+backup_directory_usable() {
+  host_gid=$1
+  if ! probe_path=$(compose run --rm --no-deps --entrypoint /bin/sh taina \
+    -c 'probe=$(mktemp /app/backups/.taina-write-test.XXXXXX) || exit 1
+        mode=$(printf "%o" $((0666 & ~0$(umask)))) || exit 1
+        chmod "$mode" "$probe" || exit 1
+        printf "%s\n" "${probe##*/}"' 2>/dev/null); then return 1; fi
+  probe=${probe_path##*/}
+  case "$probe" in .taina-write-test.*) ;; *) return 1 ;; esac
+  cat "$backup_dir/$probe" >/dev/null 2>&1 || return 1
+  compose run --rm --no-deps --env PROBE="/app/backups/$probe" --entrypoint /bin/sh taina \
+    -c 'rm -f -- "$PROBE"' >/dev/null 2>&1 || return 1
+  [ -r "$backup_dir" ] && [ -x "$backup_dir" ] || return 1
+  state=$(backup_stat) || return 1
+  mode=${state%% *}; gid=${state#* }
+  [ "$gid" = "$host_gid" ] || return 1
+  case "$mode" in *0) return 0 ;; *) return 1 ;; esac
+}
+
+repair_backup_directory() {
+  host_gid=$1
+  compose run --rm --no-deps --user 0 --entrypoint /bin/sh taina \
+    -c "chown 65534:$host_gid /app/backups && chmod 2770 /app/backups" ||
+    die 3 "could not prepare backup directory permissions for container user and host group $host_gid"
+}
+
+prepare_backup_directory() {
+  host_gid=$(id -g)
+  case "$host_gid" in ''|*[!0-9]*) die 3 "could not determine the host GID" ;; esac
+  if backup_directory_usable "$host_gid"; then return; fi
+  repair_backup_directory "$host_gid"
+  backup_directory_usable "$host_gid" || die 3 "the backup directory is not usable by the container and host group"
+}
+
+backup() {
+  if [ "$#" -eq 0 ]; then
+    :
+  elif [ "$#" -eq 2 ] && [ "$1" = --out ] && [ "$2" = /app/backups ]; then
+    :
+  else
+    die 2 "the Compose bundle writes backups only to /app/backups (host path: $backup_dir)"
+  fi
+  need_deployment
+  need_docker
+  prepare_backup_directory
+  printf 'Backups: %s on host, /app/backups in container\n' "$backup_dir"
+  run_once backup --out /app/backups
+}
+
+restore() {
+  [ "$#" -eq 1 ] || die 2 "usage: ./taina restore ARCHIVE_NAME"
+  archive=$1
+  case "$archive" in
+    ''|.|..|-*|*/*|*"$newline"*) die 2 "ARCHIVE_NAME must be a filename directly inside $backup_dir" ;;
+  esac
+  [ -f "$backup_dir/$archive" ] || die 1 "backup archive not found: $backup_dir/$archive"
+  need_deployment
+  need_docker
+  if ! running=$(compose ps --quiet taina); then
+    die 3 "could not query the Compose service state; restore was not run"
+  fi
+  case "$running" in
+    '') ;;
+    *"$newline"*) die 3 "unexpected Compose service state; restore was not run" ;;
+    *) die 3 "the Compose service is running; stop it with 'docker compose stop taina' before restore" ;;
+  esac
+  run_once restore "/app/backups/$archive"
+}
+
+main() {
+  [ "$#" -gt 0 ] || { usage; return 2; }
+  command=$1
+  shift
+  case "$command" in
+    --help|-h|help) usage ;;
+    init) init "$@" ;;
+    backup) backup "$@" ;;
+    restore) restore "$@" ;;
+    *) run_domain "$command" "$@" ;;
+  esac
+}
+
+main "$@"

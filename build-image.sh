@@ -1,61 +1,27 @@
-#!/usr/bin/env sh
-# Monta a imagem do Tainá na sua própria caixa, a partir do código-fonte, para
-# a CLI usar no lugar da imagem publicada.
-#
-# Uso:
-#   ./build-image.sh                    # monta do main mais recente
-#   TAINA_REF=v0.1.0 ./build-image.sh   # monta de uma tag específica
-#
-# Depois, aponte a CLI para essa imagem:
-#
-#   TAINA_IMAGE=taina:local taina setup
-#
-# (ou escreva TAINA_IMAGE=taina:local no taina.conf).
-
+#!/bin/sh
+# Optional development helper. Normal deployments use the pinned published
+# image from deploy/compose/compose.yaml.
 set -eu
 
-SOURCE_DIR="taina-src"
-SOURCE_URL="https://github.com/taina-labs/taina.git"
-IMAGE="taina:local"
+source_dir=${TAINA_SOURCE_DIR:-taina-src}
+source_url=https://github.com/taina-labs/taina.git
+image=${TAINA_IMAGE:-taina:local}
+ref=${TAINA_REF:-main}
 
-say() { printf '%s\n' "$*"; }
-step() { printf '\n==> %s\n' "$*"; }
-die() { printf 'ERRO: %s\n' "$*" >&2; exit 1; }
+die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+command -v docker >/dev/null 2>&1 || die "docker is required"
+command -v git >/dev/null 2>&1 || die "git is required"
 
-step "Conferindo requisitos"
-command -v docker >/dev/null 2>&1 || die "docker não está instalado. Veja https://docs.docker.com/get-docker/"
-command -v git >/dev/null 2>&1 || die "git não está instalado."
-
-REF="${TAINA_REF:-main}"
-
-# ---------------------------------------------------------------------------
-# 1. Código-fonte.
-# ---------------------------------------------------------------------------
-if [ -d "$SOURCE_DIR/.git" ]; then
-  step "Atualizando o código em $SOURCE_DIR"
-  git -C "$SOURCE_DIR" fetch --quiet origin
-  git -C "$SOURCE_DIR" checkout --quiet "$REF"
-  git -C "$SOURCE_DIR" pull --quiet --ff-only origin "$REF" 2>/dev/null ||
-    git -C "$SOURCE_DIR" reset --quiet --hard "origin/$REF"
+if [ -d "$source_dir/.git" ]; then
+  git -C "$source_dir" fetch --quiet origin
+  git -C "$source_dir" checkout --quiet "$ref"
+  git -C "$source_dir" pull --quiet --ff-only origin "$ref" 2>/dev/null ||
+    git -C "$source_dir" reset --quiet --hard "origin/$ref"
 else
-  step "Baixando o código do Tainá ($REF)"
-  [ -e "$SOURCE_DIR" ] && die "o caminho $SOURCE_DIR existe mas não é um repositório git. Remova-o e rode de novo."
-  git clone --quiet --branch "$REF" --depth 1 "$SOURCE_URL" "$SOURCE_DIR"
+  [ ! -e "$source_dir" ] || die "$source_dir exists but is not a Git repository"
+  git clone --quiet --branch "$ref" --depth 1 "$source_url" "$source_dir"
 fi
 
-# ---------------------------------------------------------------------------
-# 2. Construir.
-# ---------------------------------------------------------------------------
-step "Construindo a imagem $IMAGE (pode levar vários minutos na primeira vez)"
-docker build -t "$IMAGE" "$SOURCE_DIR"
-
-step "Imagem pronta"
-say ""
-say "A CLI usa a imagem publicada por padrão. Para usar esta:"
-say ""
-say "    TAINA_IMAGE=$IMAGE taina setup"
-say ""
-say "ou escreva TAINA_IMAGE=$IMAGE no taina.conf e rode 'taina setup'."
-say ""
-say "Para publicar uma versão nova depois de mexer no código, rode este script"
-say "de novo e depois 'taina update'."
+docker build --tag "$image" "$source_dir"
+printf '%s\n' "built $image"
+printf '%s\n' "To test it, create deploy/compose/compose.yaml override with image: $image."

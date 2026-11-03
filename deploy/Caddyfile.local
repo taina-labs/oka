@@ -21,7 +21,7 @@
 	# TLS sob demanda: o Caddy só emite certificado depois de perguntar ao
 	# app (o /health responde 200 com o app no ar; sem app, ele recusa).
 	on_demand_tls {
-		ask http://app:4000/health
+		ask http://taina:4000/health
 	}
 }
 
@@ -52,5 +52,5 @@ https:// {
 		-Server
 	}
 
-	reverse_proxy app:4000
+	reverse_proxy taina:4000
 }

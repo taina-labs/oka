@@ -1,16 +1,10 @@
-# Segredos gerados pelo install.sh. Nunca versione.
-.env
-.env.*
+# Local Compose deployment state and configuration.
+deploy/compose/taina.conf
+deploy/compose/data/
+deploy/compose/storage/
+deploy/compose/backups/
 
-# Artefatos locais
-*.log
-.DS_Store
-
-# build-image.sh: o código-fonte clonado e o override que aponta o Compose
-# para a imagem construída na própria caixa. Ambos são da máquina, não do repo.
+# Local image build checkout and macOS metadata.
 taina-src/
-docker-compose.override.yml
-
-# update.sh: o backup pré-atualização do banco (e o registro da imagem
-# anterior). Fica na máquina, não no repo.
-rollback/
+.DS_Store
+*.log

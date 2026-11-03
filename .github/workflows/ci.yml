@@ -2,28 +2,27 @@ name: ci
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
-    branches:
-      - main
+    branches: [main]
 
 jobs:
-  cli:
+  checks:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: cli
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Zig
-        uses: mlugg/setup-zig@v2
-        with:
-          version: 0.17.0
-
-      - name: Build
-        run: zig build
-
-      - name: Test
-        run: zig build test
+      - name: Check shell syntax
+        run: sh -n build-image.sh deploy/compose/taina deploy/compose/smoke.sh
+      - name: ShellCheck
+        run: shellcheck build-image.sh deploy/compose/taina deploy/compose/smoke.sh
+      - name: Compose static config
+        run: |
+          mkdir -p deploy/compose/backups
+          cp deploy/compose/taina.conf.example deploy/compose/taina.conf
+          docker compose --project-directory deploy/compose --file deploy/compose/compose.yaml config
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+      - name: Nix formatting
+        run: nix run nixpkgs#nixpkgs-fmt -- --check flake.nix
+      - name: Nix flake checks
+        run: nix flake check --no-build
