@@ -15,8 +15,11 @@ docker compose up --detach --wait
 ```
 
 The service is named `taina`, publishes `127.0.0.1:4000`, and stores state in
-the named Docker volumes `taina-data` and `taina-storage`, plus the local
-`backups` directory. The image tag is pinned
+the named Docker volumes `taina-data` and `taina-storage`. Backups go to the
+host directory bound to `/app/backups`: the `source:` of that bind in
+`compose.yaml`, `./backups` by default, which must already exist. Point it at a
+separate disk or mount for disaster recovery; a backup on the same filesystem as
+the data volume only survives mistakes, not a disk loss. The image tag is pinned
 in `compose.yaml`. Put Caddy, Tailscale Serve, or another TLS proxy in front;
 `deploy/Caddyfile` and `deploy/Caddyfile.local` are examples.
 
@@ -44,14 +47,14 @@ its persistent secret under the configured data directory on first boot.
 
 ### Rootless Docker
 
-The operator commands assume the container and the host share a uid/gid
-namespace, which holds for a rootful daemon. Under
-[rootless Docker](https://docs.docker.com/engine/security/rootless/) the
-operator is mapped to container uid 0 and every other user to a subuid, so
-`./taina` runs the commands that touch `./backups` (`backup`, `restore`,
-`doctor`) as root, which is the operator on the host. The `backups` directory
-must stay owned by your user; if an earlier run left it under a subuid, reclaim
-it:
+Under [rootless Docker](https://docs.docker.com/engine/security/rootless/) your
+user is mapped to container uid 0 and every other user to a subuid, so the host
+bind mounts are reachable only by container root. Run the service as that uid by
+adding `user: "0"` to the `taina` service in `compose.yaml`; otherwise the
+scheduled backup cannot write `./backups` and fails silently. `./taina` already
+runs the commands that touch the backup directory (`backup`, `restore`,
+`doctor`) as root for the same reason. The backup directory must stay owned by
+your user; if an earlier run left it under a subuid, reclaim it:
 
 ```sh
 sudo chown -R "$(id -u):$(id -g)" backups
