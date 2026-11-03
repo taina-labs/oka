@@ -2,7 +2,7 @@ name: taina
 
 services:
   taina:
-    image: ghcr.io/taina-labs/taina:v0.6.1
+    image: ghcr.io/taina-labs/taina:v0.7.0
     restart: unless-stopped
     entrypoint: ["/app/bin/server"]
     environment:

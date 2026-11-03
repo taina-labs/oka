@@ -72,7 +72,7 @@ inputs.oka.url = "github:taina-labs/oka";
 
 services.taina = {
   enable = true;
-  image = "ghcr.io/taina-labs/taina:v0.6.1";
+  image = "ghcr.io/taina-labs/taina:v0.7.0";
   hostname = "community.example.org";
 };
 ```

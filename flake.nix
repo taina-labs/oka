@@ -4,7 +4,7 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05-small";
     taina = {
-      url = "github:taina-labs/taina/v0.6.1";
+      url = "github:taina-labs/taina/v0.7.0";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
