@@ -42,6 +42,21 @@ docker compose up --detach --wait
 `taina.conf` is a strict, non-secret configuration file. The release creates
 its persistent secret under the configured data directory on first boot.
 
+### Rootless Docker
+
+The operator commands assume the container and the host share a uid/gid
+namespace, which holds for a rootful daemon. Under
+[rootless Docker](https://docs.docker.com/engine/security/rootless/) the
+operator is mapped to container uid 0 and every other user to a subuid, so
+`./taina` runs the commands that touch `./backups` (`backup`, `restore`,
+`doctor`) as root, which is the operator on the host. The `backups` directory
+must stay owned by your user; if an earlier run left it under a subuid, reclaim
+it:
+
+```sh
+sudo chown -R "$(id -u):$(id -g)" backups
+```
+
 For local image development, `./build-image.sh` builds an image from a Taina
 checkout. The default `deploy/compose/smoke.sh` check is static only. To run
 the Docker integration smoke test with a locally built image, set

@@ -9,6 +9,7 @@ compose_file=$root/compose.yaml
 config_file=$root/taina.conf
 example_file=$root/taina.conf.example
 backup_dir=$root/backups
+rootless=0
 newline=$(printf '\nx')
 newline=${newline%x}
 
@@ -36,6 +37,18 @@ need_docker() {
   command -v docker >/dev/null 2>&1 || die 3 "docker is required for this deployment"
   docker compose version >/dev/null 2>&1 || die 3 "Docker Compose v2 is required"
   docker info >/dev/null 2>&1 || die 3 "the Docker daemon is not running"
+  detect_rootless
+}
+
+# Rootless Docker maps the operator's host user to container uid 0 and every
+# other container user to an unused subuid. A host bind mount then reads as
+# uid 0 inside the container, so the nobody/gid dance below cannot work: the
+# commands that touch ./backups run as root, which is the operator on the host.
+detect_rootless() {
+  case "$(docker info --format '{{.SecurityOptions}}' 2>/dev/null)" in
+    *rootless*) rootless=1 ;;
+    *) rootless=0 ;;
+  esac
 }
 
 need_deployment() {
@@ -68,11 +81,20 @@ run_compose() {
 }
 
 run_once() { run_compose --entrypoint /app/bin/cli taina "$@"; }
+run_once_root() { run_compose --user 0 --entrypoint /app/bin/cli taina "$@"; }
+run_root_shell() { compose run --rm --no-deps --user 0 --entrypoint /bin/sh taina -c "$1"; }
 
 run_domain() {
   [ "$#" -gt 0 ] || die 2 "a release command is required"
   need_deployment
   need_docker
+  # doctor only reads the instance, including the ./backups bind mount, so it
+  # can run as the operator under rootless. Verbs that write the data and
+  # storage volumes stay on the image user, or the server loses its files.
+  if [ "$rootless" -eq 1 ] && [ "$1" = doctor ]; then
+    run_once_root "$@"
+    return
+  fi
   run_once "$@"
 }
 
@@ -115,6 +137,15 @@ prepare_backup_directory() {
   backup_directory_usable "$host_gid" || die 3 "the backup directory is not usable by the container and host group"
 }
 
+# Rootless variant: the container runs as the operator, so the only thing that
+# matters is that the operator can write the directory on the host. Chowning to
+# nobody or comparing the host gid is meaningless, because the host sees shifted
+# subuids for every container user except uid 0.
+prepare_rootless_backup_directory() {
+  if [ -w "$backup_dir" ]; then return; fi
+  die 3 "$backup_dir is not writable by $(id -un); rootless Docker runs the container as your user, so reclaim it with: sudo chown -R $(id -u):$(id -g) $backup_dir"
+}
+
 backup() {
   if [ "$#" -eq 0 ]; then
     :
@@ -125,9 +156,15 @@ backup() {
   fi
   need_deployment
   need_docker
-  prepare_backup_directory
-  printf 'Backups: %s on host, /app/backups in container\n' "$backup_dir"
-  run_once backup --out /app/backups
+  if [ "$rootless" -eq 1 ]; then
+    prepare_rootless_backup_directory
+    printf 'Backups: %s on host, /app/backups in container\n' "$backup_dir"
+    run_once_root backup --out /app/backups
+  else
+    prepare_backup_directory
+    printf 'Backups: %s on host, /app/backups in container\n' "$backup_dir"
+    run_once backup --out /app/backups
+  fi
 }
 
 restore() {
@@ -147,7 +184,15 @@ restore() {
     *"$newline"*) die 3 "unexpected Compose service state; restore was not run" ;;
     *) die 3 "the Compose service is running; stop it with 'docker compose stop taina' before restore" ;;
   esac
-  run_once restore "/app/backups/$archive"
+  if [ "$rootless" -eq 1 ]; then
+    run_once_root restore "/app/backups/$archive"
+    # The restored database, storage and secret land as uid 0 (the operator).
+    # The server runs as the image user, so hand the volumes back before it
+    # starts again.
+    run_root_shell 'chown -R nobody:nogroup /app/data /app/storage'
+  else
+    run_once restore "/app/backups/$archive"
+  fi
 }
 
 main() {
